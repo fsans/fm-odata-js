@@ -1,0 +1,485 @@
+// src/errors.ts
+var FMODataError = class extends Error {
+  constructor(message, init) {
+    super(message);
+    this.name = "FMODataError";
+    this.status = init.status;
+    if (init.code !== void 0) this.code = init.code;
+    if (init.odataError !== void 0) this.odataError = init.odataError;
+    if (init.request !== void 0) this.request = init.request;
+  }
+};
+async function parseErrorResponse(res, request) {
+  const status = res.status;
+  let body = "";
+  try {
+    body = await res.text();
+  } catch {
+  }
+  let code;
+  let message = res.statusText || `HTTP ${status}`;
+  let odataError = body;
+  const ctype = (res.headers.get("content-type") ?? "").toLowerCase();
+  const looksJson = ctype.includes("json") || body.startsWith("{") && body.endsWith("}");
+  const looksXml = ctype.includes("xml") || body.trimStart().startsWith("<?xml") || body.includes("<m:error");
+  if (looksJson) {
+    try {
+      const json = JSON.parse(body);
+      odataError = json;
+      const errCode = json?.error?.code;
+      const rawMsg = json?.error?.message;
+      const msg = typeof rawMsg === "string" ? rawMsg : rawMsg?.value;
+      if (errCode) code = String(errCode);
+      if (msg) message = msg;
+    } catch {
+    }
+  } else if (looksXml) {
+    const codeMatch = body.match(/<m:code>([^<]+)<\/m:code>/);
+    const msgMatch = body.match(/<m:message(?:\s[^>]*)?>([^<]+)<\/m:message>/);
+    if (codeMatch?.[1]) code = codeMatch[1];
+    if (msgMatch?.[1]) message = msgMatch[1];
+  }
+  return new FMODataError(message, { status, ...code !== void 0 ? { code } : {}, odataError, request });
+}
+
+// src/http.ts
+var AUTH_SCHEME_RE = /^(basic|bearer|negotiate|digest)\s+\S/i;
+async function resolveAuthHeader(provider) {
+  const raw = typeof provider === "function" ? await provider() : provider;
+  if (typeof raw !== "string" || raw.length === 0) {
+    throw new TypeError("fm-odata-js: token resolver produced an empty value");
+  }
+  return AUTH_SCHEME_RE.test(raw) ? raw : `Bearer ${raw}`;
+}
+function basicAuth(user, password) {
+  const raw = `${user}:${password}`;
+  const b64 = typeof Buffer !== "undefined" ? Buffer.from(raw, "utf8").toString("base64") : btoa(unescape(encodeURIComponent(raw)));
+  return `Basic ${b64}`;
+}
+function combineSignals(signals) {
+  const filtered = signals.filter((s) => s !== void 0);
+  if (filtered.length === 0) return void 0;
+  if (filtered.length === 1) return filtered[0];
+  const ctrl = new AbortController();
+  for (const s of filtered) {
+    if (s.aborted) {
+      ctrl.abort(s.reason);
+      return ctrl.signal;
+    }
+    s.addEventListener(
+      "abort",
+      () => ctrl.abort(s.reason),
+      { once: true }
+    );
+  }
+  return ctrl.signal;
+}
+var ACCEPT_DEFAULTS = {
+  json: "application/json",
+  xml: "application/xml",
+  text: "text/plain",
+  binary: "application/octet-stream",
+  none: "*/*"
+};
+async function executeRequest(ctx, url, opts = {}) {
+  return executeRequestImpl(
+    ctx,
+    url,
+    opts,
+    /* retried */
+    false
+  );
+}
+async function executeRequestImpl(ctx, url, opts, retried) {
+  const method = opts.method ?? "GET";
+  const headers = new Headers(opts.headers);
+  headers.set("Authorization", await resolveAuthHeader(ctx.token));
+  if (!headers.has("Accept")) {
+    headers.set("Accept", ACCEPT_DEFAULTS[opts.accept ?? "json"]);
+  }
+  const timeoutCtrl = new AbortController();
+  const timeoutId = ctx.timeoutMs && ctx.timeoutMs > 0 ? setTimeout(() => timeoutCtrl.abort(new Error(`Timeout after ${ctx.timeoutMs}ms`)), ctx.timeoutMs) : void 0;
+  const signal = combineSignals([opts.signal, ctx.timeoutMs ? timeoutCtrl.signal : void 0]);
+  let res;
+  try {
+    res = await ctx.fetch(url, {
+      method,
+      headers,
+      ...opts.body !== void 0 ? { body: opts.body } : {},
+      ...signal ? { signal } : {}
+    });
+  } catch (err) {
+    if (timeoutId) clearTimeout(timeoutId);
+    throw err;
+  }
+  if (timeoutId) clearTimeout(timeoutId);
+  if (res.status === 401 && ctx.onUnauthorized && !retried) {
+    await ctx.onUnauthorized();
+    return executeRequestImpl(ctx, url, opts, true);
+  }
+  if (!res.ok) {
+    throw await parseErrorResponse(res, { url, method });
+  }
+  return res;
+}
+async function executeJson(ctx, url, opts = {}) {
+  const res = await executeRequest(ctx, url, opts);
+  if (res.status === 204) return void 0;
+  const ctype = (res.headers.get("content-type") ?? "").toLowerCase();
+  if (!ctype.includes("json")) {
+    const text = await res.text();
+    if (!text) return void 0;
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new FMODataError(`Expected JSON response, got "${ctype || "no content-type"}"`, {
+        status: res.status,
+        odataError: text,
+        request: { url, method: opts.method ?? "GET" }
+      });
+    }
+  }
+  return await res.json();
+}
+
+// src/url.ts
+function escapeStringLiteral(s) {
+  return s.replace(/'/g, "''");
+}
+function formatDateTime(d) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) {
+    throw new TypeError("formatDateTime: invalid Date");
+  }
+  return d.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+function formatLiteral(v) {
+  if (v === null || v === void 0) return "null";
+  if (typeof v === "string") return `'${escapeStringLiteral(v)}'`;
+  if (typeof v === "number") {
+    if (!Number.isFinite(v)) {
+      throw new TypeError(`formatLiteral: cannot encode non-finite number: ${v}`);
+    }
+    return String(v);
+  }
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (v instanceof Date) return formatDateTime(v);
+  throw new TypeError(`formatLiteral: unsupported OData literal type: ${typeof v}`);
+}
+function encodePathSegment(s) {
+  return encodeURIComponent(s);
+}
+function buildQueryString(params) {
+  const parts = [];
+  for (const [k, v] of params) {
+    if (v === "" || v === void 0 || v === null) continue;
+    parts.push(`${k}=${encodeURIComponent(v)}`);
+  }
+  return parts.join("&");
+}
+
+// src/entity.ts
+function formatKey(key) {
+  if (typeof key === "number") {
+    if (!Number.isFinite(key)) {
+      throw new TypeError("EntityRef: key must be a finite number");
+    }
+    return String(key);
+  }
+  if (typeof key === "string") return `'${escapeStringLiteral(key)}'`;
+  if (typeof key === "boolean") return key ? "true" : "false";
+  throw new TypeError("EntityRef: unsupported key type");
+}
+var EntityRef = class {
+  constructor(client, entitySet, key) {
+    this._client = client;
+    this.entitySet = entitySet;
+    this.key = key;
+  }
+  /** Absolute URL for this entity. */
+  toURL() {
+    return `${this._client.baseUrl}/${encodePathSegment(this.entitySet)}(${formatKey(this.key)})`;
+  }
+  /** `GET` the entity. Returns the parsed JSON row. */
+  async get(opts = {}) {
+    const json = await executeJson(this._client._ctx, this.toURL(), {
+      method: "GET",
+      accept: "json",
+      ...opts.signal ? { signal: opts.signal } : {}
+    });
+    return json;
+  }
+  /**
+   * `PATCH` the entity with partial values. Returns the updated row when the
+   * server echoes one (OData `Prefer: return=representation`), otherwise
+   * `undefined` on `204 No Content`.
+   */
+  async patch(body, opts = {}) {
+    const headers = {
+      "Content-Type": "application/json",
+      Prefer: opts.returnRepresentation ? "return=representation" : "return=minimal"
+    };
+    if (opts.ifMatch) headers["If-Match"] = opts.ifMatch;
+    const json = await executeJson(this._client._ctx, this.toURL(), {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify(body),
+      accept: "json",
+      ...opts.signal ? { signal: opts.signal } : {}
+    });
+    return json;
+  }
+  /** `DELETE` the entity. Resolves on success; throws `FMODataError` otherwise. */
+  async delete(opts = {}) {
+    const headers = {};
+    if (opts.ifMatch) headers["If-Match"] = opts.ifMatch;
+    await executeRequest(this._client._ctx, this.toURL(), {
+      method: "DELETE",
+      headers,
+      accept: "none",
+      ...opts.signal ? { signal: opts.signal } : {}
+    });
+  }
+};
+
+// src/query.ts
+var Filter = class _Filter {
+  constructor(expr) {
+    this.expr = expr;
+  }
+  toString() {
+    return this.expr;
+  }
+  and(other) {
+    return new _Filter(`(${this.expr}) and (${_Filter.coerce(other)})`);
+  }
+  or(other) {
+    return new _Filter(`(${this.expr}) or (${_Filter.coerce(other)})`);
+  }
+  not() {
+    return new _Filter(`not (${this.expr})`);
+  }
+  /** @internal */
+  static coerce(x) {
+    return x instanceof _Filter ? x.expr : x;
+  }
+};
+var filterFactory = {
+  eq: (f, v) => new Filter(`${f} eq ${formatLiteral(v)}`),
+  ne: (f, v) => new Filter(`${f} ne ${formatLiteral(v)}`),
+  gt: (f, v) => new Filter(`${f} gt ${formatLiteral(v)}`),
+  ge: (f, v) => new Filter(`${f} ge ${formatLiteral(v)}`),
+  lt: (f, v) => new Filter(`${f} lt ${formatLiteral(v)}`),
+  le: (f, v) => new Filter(`${f} le ${formatLiteral(v)}`),
+  startswith: (f, v) => new Filter(`startswith(${f},${formatLiteral(v)})`),
+  endswith: (f, v) => new Filter(`endswith(${f},${formatLiteral(v)})`),
+  contains: (f, v) => new Filter(`contains(${f},${formatLiteral(v)})`),
+  and: (a, b) => new Filter(`(${Filter.coerce(a)}) and (${Filter.coerce(b)})`),
+  or: (a, b) => new Filter(`(${Filter.coerce(a)}) or (${Filter.coerce(b)})`),
+  not: (a) => new Filter(`not (${Filter.coerce(a)})`),
+  raw: (s) => new Filter(s)
+};
+function resolveFilter(input) {
+  if (typeof input === "function") return Filter.coerce(input(filterFactory));
+  return Filter.coerce(input);
+}
+var Query = class _Query {
+  constructor(baseUrl, entitySet, client) {
+    /** @internal */
+    this._state = {};
+    this._baseUrl = baseUrl;
+    this._entitySet = entitySet;
+    if (client) this._client = client;
+  }
+  select(...fields) {
+    this._state.select = [...this._state.select ?? [], ...fields];
+    return this;
+  }
+  filter(input) {
+    const expr = resolveFilter(input);
+    this._state.filter = this._state.filter ? `(${this._state.filter}) and (${expr})` : expr;
+    return this;
+  }
+  or(input) {
+    const expr = resolveFilter(input);
+    this._state.filter = this._state.filter ? `(${this._state.filter}) or (${expr})` : expr;
+    return this;
+  }
+  expand(name, build) {
+    const entry = { name };
+    if (build) {
+      const nested = new _Query("", name);
+      build(nested);
+      entry.options = nested._state;
+    }
+    this._state.expand = [...this._state.expand ?? [], entry];
+    return this;
+  }
+  orderby(field, dir = "asc") {
+    this._state.orderby = [...this._state.orderby ?? [], { field, dir }];
+    return this;
+  }
+  top(n) {
+    if (!Number.isInteger(n) || n < 0) {
+      throw new RangeError(`Query#top: expected non-negative integer, got ${n}`);
+    }
+    this._state.top = n;
+    return this;
+  }
+  skip(n) {
+    if (!Number.isInteger(n) || n < 0) {
+      throw new RangeError(`Query#skip: expected non-negative integer, got ${n}`);
+    }
+    this._state.skip = n;
+    return this;
+  }
+  count(enabled = true) {
+    this._state.count = enabled;
+    return this;
+  }
+  search(term) {
+    this._state.search = term;
+    return this;
+  }
+  /** Build the absolute request URL for this query. */
+  toURL() {
+    const qs = serializeOptions(this._state, { topLevel: true });
+    const base = `${this._baseUrl}/${encodePathSegment(this._entitySet)}`;
+    return qs ? `${base}?${qs}` : base;
+  }
+  /**
+   * Get a handle to a single entity by its primary key. Subsequent operations
+   * (`.get()`, `.patch()`, `.delete()`) hit `/<EntitySet>(<key>)`.
+   */
+  byKey(key) {
+    if (!this._client) {
+      throw new Error("Query#byKey: no client attached (use FMOData#from)");
+    }
+    return new EntityRef(this._client, this._entitySet, key);
+  }
+  /**
+   * `POST` a new entity to the collection. Returns the created row (FMS echoes
+   * it by default).
+   */
+  async create(body, opts = {}) {
+    if (!this._client) {
+      throw new Error("Query#create: no client attached (use FMOData#from)");
+    }
+    const url = `${this._baseUrl}/${encodePathSegment(this._entitySet)}`;
+    const json = await executeJson(this._client._ctx, url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      accept: "json",
+      ...opts.signal ? { signal: opts.signal } : {}
+    });
+    return json;
+  }
+  /**
+   * Execute the query. Returns the parsed OData collection envelope.
+   */
+  async get(opts = {}) {
+    if (!this._client) {
+      throw new Error("Query#get: no client attached (use FMOData#from)");
+    }
+    const json = await executeJson(this._client._ctx, this.toURL(), {
+      method: "GET",
+      accept: "json",
+      ...opts.signal ? { signal: opts.signal } : {}
+    });
+    const out = { value: json?.value ?? [] };
+    if (json && typeof json["@odata.count"] === "number") out.count = json["@odata.count"];
+    if (json && typeof json["@odata.nextLink"] === "string") out.nextLink = json["@odata.nextLink"];
+    return out;
+  }
+};
+function serializeOptions(s, opts) {
+  const pairs = [];
+  if (s.select && s.select.length > 0) {
+    pairs.push(["$select", s.select.join(",")]);
+  }
+  if (s.filter) {
+    pairs.push(["$filter", s.filter]);
+  }
+  if (s.expand && s.expand.length > 0) {
+    const parts = s.expand.map((e) => {
+      if (!e.options) return e.name;
+      const inner = serializeOptions(e.options, { topLevel: false });
+      return inner ? `${e.name}(${inner})` : e.name;
+    });
+    pairs.push(["$expand", parts.join(",")]);
+  }
+  if (s.orderby && s.orderby.length > 0) {
+    pairs.push([
+      "$orderby",
+      s.orderby.map((o) => `${o.field} ${o.dir}`).join(",")
+    ]);
+  }
+  if (s.top !== void 0) pairs.push(["$top", String(s.top)]);
+  if (s.skip !== void 0) pairs.push(["$skip", String(s.skip)]);
+  if (s.count) pairs.push(["$count", "true"]);
+  if (s.search) pairs.push(["$search", s.search]);
+  if (opts.topLevel) return buildQueryString(pairs);
+  return pairs.map(([k, v]) => `${k}=${v}`).join(";");
+}
+
+// src/client.ts
+var FMOData = class {
+  constructor(options) {
+    if (!options.host) throw new TypeError("FMOData: `host` is required");
+    if (!options.database) throw new TypeError("FMOData: `database` is required");
+    if (options.token === void 0 || options.token === null) {
+      throw new TypeError("FMOData: `token` is required");
+    }
+    this.host = options.host.replace(/\/+$/, "");
+    this.database = options.database;
+    this.baseUrl = `${this.host}/fmi/odata/v4/${encodeURIComponent(this.database)}`;
+    this.timeoutMs = options.timeoutMs;
+    this._ctx = {
+      token: options.token,
+      fetch: options.fetch ?? globalThis.fetch.bind(globalThis),
+      timeoutMs: options.timeoutMs,
+      ...options.onUnauthorized ? { onUnauthorized: options.onUnauthorized } : {}
+    };
+  }
+  /**
+   * Start a query against the given entity set (FileMaker layout name).
+   */
+  from(entitySet) {
+    if (!entitySet) throw new TypeError("FMOData#from: entitySet is required");
+    return new Query(this.baseUrl, entitySet, this);
+  }
+  /**
+   * Low-level escape hatch: execute a raw request against a path relative to
+   * the database base URL (or an absolute URL). Returns the parsed JSON body.
+   *
+   * @example
+   * ```ts
+   * const body = await db.request<{ value: unknown[] }>('/contact?$top=1')
+   * ```
+   */
+  async request(pathOrUrl, opts = {}) {
+    return executeJson(this._ctx, this._resolveUrl(pathOrUrl), opts);
+  }
+  /**
+   * Low-level escape hatch: execute a raw request and return the `Response`
+   * object directly (useful for binary / streaming responses).
+   */
+  async rawRequest(pathOrUrl, opts = {}) {
+    return executeRequest(this._ctx, this._resolveUrl(pathOrUrl), opts);
+  }
+  /** @internal */
+  _resolveUrl(pathOrUrl) {
+    if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+    if (pathOrUrl.startsWith("/")) return `${this.baseUrl}${pathOrUrl}`;
+    return `${this.baseUrl}/${pathOrUrl}`;
+  }
+};
+export {
+  EntityRef,
+  FMOData,
+  FMODataError,
+  Filter,
+  Query,
+  basicAuth,
+  filterFactory
+};
