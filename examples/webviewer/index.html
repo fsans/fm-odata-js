@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>fm-odata-js · Contacts Web Viewer demo</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #1e293b;
+        --panel-2: #334155;
+        --border: #475569;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #38bdf8;
+        --accent-strong: #0ea5e9;
+        --danger: #f87171;
+        --ok: #4ade80;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; padding: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro", Segoe UI, Roboto, sans-serif;
+      }
+      header {
+        display: flex; align-items: baseline; gap: 12px;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--border);
+        background: linear-gradient(180deg, #0b1220, #0f172a);
+      }
+      header h1 { margin: 0; font-size: 15px; letter-spacing: .3px; }
+      header .sub { color: var(--muted); font-size: 12px; }
+      header .spacer { flex: 1; }
+      header .status {
+        font-size: 12px; padding: 3px 10px; border-radius: 999px;
+        background: var(--panel-2); color: var(--muted);
+      }
+      header .status.ok { background: #064e3b; color: var(--ok); }
+      header .status.err { background: #450a0a; color: var(--danger); }
+
+      .config {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr auto;
+        gap: 8px;
+        padding: 10px 18px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--border);
+      }
+      .config label {
+        display: flex; flex-direction: column; gap: 2px;
+        font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px;
+      }
+      .config input {
+        background: var(--bg); color: var(--text);
+        border: 1px solid var(--border); border-radius: 6px;
+        padding: 6px 8px; font: inherit;
+      }
+      .config input:focus { outline: none; border-color: var(--accent); }
+      .config button {
+        align-self: end;
+        background: var(--accent); color: #042f3c;
+        border: 0; border-radius: 6px;
+        padding: 8px 14px; font-weight: 600; cursor: pointer;
+      }
+      .config button:hover { background: var(--accent-strong); }
+      .config button:disabled { opacity: .5; cursor: not-allowed; }
+
+      nav.tabs {
+        display: flex; gap: 2px;
+        padding: 10px 18px 0;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+      }
+      nav.tabs button {
+        background: transparent; color: var(--muted);
+        border: 0; border-bottom: 2px solid transparent;
+        padding: 8px 14px; font: inherit; cursor: pointer;
+        border-radius: 6px 6px 0 0;
+      }
+      nav.tabs button.active { color: var(--text); border-color: var(--accent); background: var(--bg); }
+      nav.tabs .count { margin-left: 6px; font-size: 11px; color: var(--muted); }
+
+      main { padding: 14px 18px 24px; overflow: auto; }
+      .empty, .loading, .error {
+        padding: 24px; text-align: center; color: var(--muted);
+      }
+      .error { color: var(--danger); }
+
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      thead th {
+        position: sticky; top: 0;
+        background: var(--panel);
+        text-align: left;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--border);
+        font-weight: 600; color: var(--muted);
+        text-transform: uppercase; letter-spacing: .5px; font-size: 11px;
+      }
+      tbody td {
+        padding: 8px 10px;
+        border-bottom: 1px solid rgba(71, 85, 105, .4);
+        white-space: nowrap;
+        max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+      }
+      tbody tr:hover { background: rgba(56, 189, 248, .06); }
+      tbody td.null { color: var(--muted); font-style: italic; }
+
+      footer {
+        padding: 8px 18px;
+        font-size: 11px; color: var(--muted);
+        border-top: 1px solid var(--border);
+        background: var(--panel);
+      }
+      footer code { color: var(--text); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>📇 Contacts · fm-odata-js</h1>
+      <span class="sub">Web Viewer demo</span>
+      <span class="spacer"></span>
+      <span id="status" class="status">idle</span>
+    </header>
+
+    <section class="config">
+      <label>Host
+        <input id="host" type="text" value="https://fms.example.com" placeholder="https://fms.example.com" />
+      </label>
+      <label>Database
+        <input id="database" type="text" value="Contacts" />
+      </label>
+      <label>User
+        <input id="user" type="text" value="admin" />
+      </label>
+      <label>Password
+        <input id="password" type="password" value="admin" />
+      </label>
+      <button id="connect" style="grid-column: 1 / -1;">Connect &amp; refresh all tables</button>
+    </section>
+
+    <nav class="tabs" id="tabs"></nav>
+    <main id="view"><div class="empty">Click <b>Connect</b> to load data.</div></main>
+
+    <footer>
+      Powered by
+      <a href="https://github.com/fsans/fm-odata-js" style="color: var(--accent);">fm-odata-js</a>
+      — loaded from jsDelivr. Credentials shown here are for the bundled demo
+      database only; <b>change them before hosting on a real network</b>.
+    </footer>
+
+    <script type="module">
+      import { FMOData, basicAuth, FMODataError } from 'https://cdn.jsdelivr.net/gh/fsans/fm-odata-js@v0.1.1/dist/fm-odata.esm.min.js'
+
+      const TABLES = ['contact', 'email', 'address', 'phone']
+      const state = { active: TABLES[0], data: {}, counts: {} }
+
+      const $ = (id) => document.getElementById(id)
+      const status = $('status')
+      const tabs = $('tabs')
+      const view = $('view')
+
+      function setStatus(text, kind = '') {
+        status.textContent = text
+        status.className = 'status' + (kind ? ' ' + kind : '')
+      }
+
+      function renderTabs() {
+        tabs.innerHTML = ''
+        for (const t of TABLES) {
+          const b = document.createElement('button')
+          b.textContent = t
+          if (t === state.active) b.classList.add('active')
+          const n = state.counts[t]
+          if (n !== undefined) {
+            const c = document.createElement('span')
+            c.className = 'count'
+            c.textContent = n
+            b.appendChild(c)
+          }
+          b.addEventListener('click', () => { state.active = t; renderAll() })
+          tabs.appendChild(b)
+        }
+      }
+
+      function renderView() {
+        const rows = state.data[state.active]
+        if (rows === undefined) { view.innerHTML = '<div class="empty">No data yet.</div>'; return }
+        if (rows instanceof Error) {
+          const err = rows
+          const code = err instanceof FMODataError ? ` (HTTP ${err.status}${err.code ? ' · ' + err.code : ''})` : ''
+          view.innerHTML = `<div class="error">${escapeHtml(err.message)}${code}</div>`
+          return
+        }
+        if (!rows.length) { view.innerHTML = '<div class="empty">No rows.</div>'; return }
+        const cols = Object.keys(rows[0])
+        const thead = '<tr>' + cols.map((c) => `<th>${escapeHtml(c)}</th>`).join('') + '</tr>'
+        const tbody = rows.map((r) =>
+          '<tr>' + cols.map((c) => {
+            const v = r[c]
+            if (v === null || v === undefined || v === '') return '<td class="null">∅</td>'
+            return `<td title="${escapeHtml(String(v))}">${escapeHtml(String(v))}</td>`
+          }).join('') + '</tr>'
+        ).join('')
+        view.innerHTML = `<table><thead>${thead}</thead><tbody>${tbody}</tbody></table>`
+      }
+
+      function renderAll() { renderTabs(); renderView() }
+
+      function escapeHtml(s) {
+        return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+      }
+
+      async function connect() {
+        const host = $('host').value.trim()
+        const database = $('database').value.trim()
+        const user = $('user').value
+        const password = $('password').value
+        if (!host || !database) { setStatus('missing host/db', 'err'); return }
+
+        const db = new FMOData({
+          host, database,
+          token: basicAuth(user, password),
+          timeoutMs: 15_000,
+        })
+
+        setStatus('loading…')
+        state.data = {}; state.counts = {}
+        renderAll()
+
+        await Promise.all(TABLES.map(async (t) => {
+          try {
+            const { value, count } = await db.from(t).top(100).count().get()
+            state.data[t] = value
+            state.counts[t] = count ?? value.length
+          } catch (err) {
+            state.data[t] = err instanceof Error ? err : new Error(String(err))
+            state.counts[t] = '—'
+          }
+        }))
+
+        const anyErr = TABLES.some((t) => state.data[t] instanceof Error)
+        setStatus(anyErr ? 'loaded with errors' : 'connected', anyErr ? 'err' : 'ok')
+        renderAll()
+      }
+
+      $('connect').addEventListener('click', connect)
+      renderAll()
+    </script>
+  </body>
+</html>

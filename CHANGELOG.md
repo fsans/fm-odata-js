@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-04-22
+
+### Added
+
+- `examples/webviewer/`: standalone HTML demo for the `Contacts` solution, in two variants:
+  - `index.html` — loads the library from jsDelivr (`/gh/fsans/fm-odata-js@v0.1.1`).
+  - `index-inline.html` — fully inlined bundle; zero runtime network dependencies.
+- `examples/Contacts.fmp12` referenced from the docs as a ready-to-host demo database.
+
+### Changed
+
+- README overhaul: centered hero, badges, feature bullets, status table, production testimonial blockquote, Docs/Contributing/License sections.
+- `examples/consumer-node/README.md`: added a "Test database" section and sanitized placeholder credentials.
+- `LICENSE`: corrected copyright holder name to `Francesc Sans`.
+
 ## [0.1.1] - 2026-04-22
 
 ### Added

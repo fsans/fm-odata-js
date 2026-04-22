@@ -100,7 +100,10 @@ FM_ODATA_LIVE=1 npm test -- tests/integration  # full CRUD against real FMS
 
 - [`docs/README.md`](./docs/README.md) — API reference and deeper guides
 - [`docs/filemaker-quirks.md`](./docs/filemaker-quirks.md) — the three FMS deviations and how this library works around them
-- [`examples/`](./examples) — runnable sample projects ([consumer-node](./examples/consumer-node))
+- [`examples/`](./examples) — runnable sample projects
+  - [`consumer-node/`](./examples/consumer-node) — Node CLI consuming the library
+  - [`webviewer/`](./examples/webviewer) — **standalone HTML page** ready to drop into a FileMaker Web Viewer
+- [`examples/Contacts.fmp12`](./examples/Contacts.fmp12) — ready-to-host FileMaker test database matching the examples. **Credentials: `admin` / `admin`** (dev use only — change before exposing to any network).
 
 ## 🤝 Contributing
 

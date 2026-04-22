@@ -7,6 +7,17 @@ in the `Contacts` solution and prints the total counts.
 This is exactly the setup you would use in any real project — just swap the
 `file:` path for a published version once the library ships to npm.
 
+## Test database
+
+A ready-to-host FileMaker file is bundled at [`../Contacts.fmp12`](../Contacts.fmp12).
+Host it on an FMS instance with the OData API enabled, then point the example
+at it using the env vars below.
+
+> 🔐 **Default credentials:** `admin` / `admin`
+>
+> These exist purely for local testing. **Change them before hosting the file
+> on any network you do not fully control.**
+
 ## Setup
 
 ```bash
