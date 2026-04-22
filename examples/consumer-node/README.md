@@ -28,18 +28,18 @@ is to reuse the repo root `.env`:
 node --env-file=../../.env index.mjs
 
 # Older Node: export the vars manually
-export FM_ODATA_HOST=https://192.168.0.24
+export FM_ODATA_HOST=https://fms.example.com
 export FM_ODATA_DATABASE=Contacts
-export FM_ODATA_USER=admin
-export FM_ODATA_PASSWORD=wakawaka
-export FM_ODATA_INSECURE_TLS=1
+export FM_ODATA_USER=your-fms-user
+export FM_ODATA_PASSWORD=your-fms-password
+export FM_ODATA_INSECURE_TLS=1   # only for self-signed LAN certs
 node index.mjs
 ```
 
 Expected output (rows will vary based on your data):
 
 ```text
-[example] Connected to https://192.168.0.24/Contacts
+[example] Connected to https://fms.example.com/Contacts
 
 contact   total=0  first 0 row(s):
 

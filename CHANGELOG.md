@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-04-22
+
 ### Added
 
 - M1 scaffold: repo layout, TypeScript/Vitest/Playwright/esbuild configs, empty `FMOData` class, placeholder failing unit test.
