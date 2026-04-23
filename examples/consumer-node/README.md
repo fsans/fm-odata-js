@@ -13,7 +13,7 @@ A ready-to-host FileMaker file is bundled at [`../Contacts.fmp12`](../Contacts.f
 Host it on an FMS instance with the OData API enabled, then point the example
 at it using the env vars below.
 
-> 🔐 **Default credentials:** `admin` / `admin`
+> **Default credentials:** `admin` / `admin`
 >
 > These exist purely for local testing. **Change them before hosting the file
 > on any network you do not fully control.**

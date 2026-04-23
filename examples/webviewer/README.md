@@ -42,7 +42,7 @@ Both have identical UI and behavior.
    | User     | `admin`                    |
    | Password | `admin`                    |
 
-   > 🔐 These credentials match the bundled `Contacts.fmp12` demo database.
+   > These credentials match the bundled `Contacts.fmp12` demo database.
    > **Change them before hosting on any network you don't fully control.**
 
 ## What it does

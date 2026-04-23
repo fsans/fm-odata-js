@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ fm-odata-js
+# fm-odata-js
 
 **A tiny, type-safe OData v4 client built for FileMaker Server.**
 
@@ -16,29 +16,45 @@ Zero runtime dependencies · ~3 KB gzipped · One ES module · Web Viewer / Brow
 
 ---
 
-## ✨ Why fm-odata-js?
+## Why fm-odata-js?
 
 FileMaker Server speaks OData v4, but the spec has sharp corners and FMS has quirks. `fm-odata-js` smooths both — so you can forget about URL-encoding `$filter` predicates and focus on your data.
 
-> 🧪 **Battle-tested in production.** I've been using this library heavily to let FileMaker Web Viewer instances talk to the *same* hosted database they live in — and the performance has been genuinely impressive. Queries that used to require round-tripping through scripts and set-field loops now resolve in a single OData call, with noticeably lower latency and a much cleaner code path. If you're building rich Web Viewer UIs backed by FMS, this is the fastest route I've found.
+> **Battle-tested in production.** I've been using this library heavily to let FileMaker Web Viewer instances talk to the *same* hosted database they live in — and the performance has been genuinely impressive. Queries that used to require round-tripping through scripts and set-field loops now resolve in a single OData call, with noticeably lower latency and a much cleaner code path. If you're building rich Web Viewer UIs backed by FMS, this is the fastest route I've found.
 
-- 🪶 **Tiny.** Single ES module, zero runtime dependencies, ~3 KB gzipped.
-- 🧠 **Type-safe.** Fluent, chainable query builder with full TS inference.
-- 🔌 **Runs anywhere.** Drop it into a FileMaker Web Viewer, a browser, or Node 18+.
-- 🛡️ **FMS-aware.** Handles the three documented FMS OData deviations for you.
-- 🔁 **Resilient.** Basic/Bearer auth with 401 retry, `AbortSignal`, and timeouts built in.
-- 🎯 **Honest errors.** Every failure becomes a normalized `FMODataError`.
+- **Tiny.** Single ES module, zero runtime dependencies, ~3 KB gzipped.
+- **Type-safe.** Fluent, chainable query builder with full TS inference.
+- **Runs anywhere.** Drop it into a FileMaker Web Viewer, a browser, or Node 18+.
+- **FMS-aware.** Handles the three documented FMS OData deviations for you.
+- **Resilient.** Basic/Bearer auth with 401 retry, `AbortSignal`, and timeouts built in.
+- **Honest errors.** Every failure becomes a normalized `FMODataError`.
 
-## 🚦 Status
+## Status
 
 | Milestone | Scope                                                             | State |
 | --------- | ----------------------------------------------------------------- | :---: |
-| **M1–M3** | Query builder · collection GET · single-entity CRUD · auth · errors | ✅    |
-| **M4–M6** | Containers · scripts · `$metadata` · `$batch`                      | 🚧    |
+| **M1–M3** | Query builder · collection GET · single-entity CRUD · auth · errors | Done |
+| **M4–M6** | Containers · scripts · `$metadata` · `$batch`                      | In Progress |
 
 Full roadmap and changes live in [`CHANGELOG.md`](./CHANGELOG.md).
 
-## 📦 Install
+## Install
+
+> **Not yet published to npm.** Until the first release hits the registry, install directly from GitHub or a local checkout.
+
+From GitHub:
+
+```bash
+npm install github:fsans/fm-odata-js
+```
+
+From a local clone:
+
+```bash
+npm install /path/to/fm-odata-js
+```
+
+Once published, the canonical install will be:
 
 ```bash
 npm install fm-odata-js
@@ -51,7 +67,7 @@ npm install
 npm test          # 100 unit tests, offline
 ```
 
-## 🚀 Quick start
+## Quick start
 
 ```ts
 import { FMOData, basicAuth } from 'fm-odata-js'
@@ -63,7 +79,7 @@ const db = new FMOData({
   timeoutMs: 15_000,
 })
 
-// 🔎 Collection read
+// Collection read
 const { value, count } = await db
   .from('contact')
   .select('id', 'first_name', 'last_name')
@@ -73,19 +89,19 @@ const { value, count } = await db
   .count()
   .get()
 
-// ➕ Create
+// Create
 const created = await db.from('contact').create({
   first_name: 'Alice',
   last_name: 'Liddell',
 })
 
-// 👁️  Read / ✏️  update / 🗑️  delete a single row
+// Read / update / delete a single row
 const row = await db.from('contact').byKey(created.id).get()
 await db.from('contact').byKey(row.id).patch({ first_name: 'A.' })
 await db.from('contact').byKey(row.id).delete()
 ```
 
-## 🧪 Live integration tests
+## Live integration tests
 
 Copy `.env.sample` to `.env` and fill in real FMS credentials:
 
@@ -96,7 +112,7 @@ FM_ODATA_LIVE=1 npm test -- tests/integration  # full CRUD against real FMS
 
 > Using self-signed certs on a LAN box? Set `FM_ODATA_INSECURE_TLS=1` in `.env`.
 
-## 📚 Docs
+## Docs
 
 - [`docs/README.md`](./docs/README.md) — API reference and deeper guides
 - [`docs/filemaker-quirks.md`](./docs/filemaker-quirks.md) — the three FMS deviations and how this library works around them
@@ -105,10 +121,10 @@ FM_ODATA_LIVE=1 npm test -- tests/integration  # full CRUD against real FMS
   - [`webviewer/`](./examples/webviewer) — **standalone HTML page** ready to drop into a FileMaker Web Viewer
 - [`examples/Contacts.fmp12`](./examples/Contacts.fmp12) — ready-to-host FileMaker test database matching the examples. **Credentials: `admin` / `admin`** (dev use only — change before exposing to any network).
 
-## 🤝 Contributing
+## Contributing
 
 Issues and PRs are welcome. Please run `npm test` and `npm run typecheck` before opening a PR.
 
-## 📄 License
+## License
 
 [MIT](./LICENSE) © fm-odata-js contributors
