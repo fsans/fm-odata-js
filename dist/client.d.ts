@@ -4,9 +4,10 @@ import { type ScriptOptions, type ScriptResult } from './scripts.js';
 import type { FMODataOptions, RequestOptions } from './types.js';
 /**
  * `FMOData` is the entrypoint for all OData operations against a FileMaker
- * Server database. As of M3, collection `.get()` and single-entity CRUD
- * (`byKey().get/patch/delete`) are implemented. Containers, scripts, metadata,
- * and batch arrive in later milestones.
+ * Server database. As of v0.1.4 it covers collection `.get()`, single-entity
+ * CRUD (`byKey().get/patch/delete`), and FileMaker script invocation
+ * (`script()` at database / entity-set / record scope). Containers,
+ * `$metadata`, and `$batch` arrive in later M4 parts.
  */
 export declare class FMOData {
     readonly host: string;

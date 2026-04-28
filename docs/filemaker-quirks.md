@@ -41,3 +41,24 @@ Never enable this in production; supply a properly-rooted cert instead.
 FMS returns date-time values as UTC ISO-8601 strings. Both with and without
 milliseconds are observed; the library parses either. When sending values in
 `$filter`, millisecond precision is stripped to avoid round-trip issues.
+
+## `scriptResult` is always a string
+
+Scripts invoked via `POST /<db>/Script.<name>` return their text result under
+the `scriptResult` field of the JSON envelope. Regardless of whether the
+script's `Exit Script [Text Result: ...]` expression evaluates to a number,
+boolean, container, or text value, FMS serializes it as a **string** (numbers
+become decimal strings, booleans become `"1"` / `"0"`, etc.).
+
+**Workaround.** `ScriptResult.scriptResult` is typed as `string | undefined`.
+Callers expecting a number/boolean must parse the string explicitly:
+
+```ts
+const { scriptResult } = await db.script('GetCount')
+const count = Number(scriptResult)            // not auto-coerced
+```
+
+The `scriptError` field follows the same rule: even though it always carries
+a numeric error code, it arrives as a string (e.g. `"0"`, `"101"`). The
+library preserves that wire format on `FMScriptError#scriptError` to keep
+exact-equality comparisons (`err.scriptError === '104'`) reliable.

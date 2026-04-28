@@ -59,7 +59,24 @@ address   total=0  first 0 row(s):
 email     total=0  first 0 row(s):
 
 phone     total=0  first 0 row(s):
+
+script    Ping => result="hello-from-fm-odata-js" error=0
 ```
+
+## Scripts
+
+The example also invokes a FileMaker script at database scope at the end of
+the run. To exercise it, add a script to the `Contacts` solution that simply
+echoes its parameter:
+
+```
+# Script: "Ping"
+Exit Script [Text Result: Get(ScriptParameter)]
+```
+
+If the script is missing the example detects FileMaker error `104` and prints
+a "skipping" line instead of failing. Override the name via
+`FM_ODATA_PING_SCRIPT` if your script is called something else.
 
 ## TypeScript variant
 

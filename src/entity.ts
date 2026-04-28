@@ -1,6 +1,7 @@
 /**
  * Single-entity handle returned by `Query#byKey(key)`. Supports `.get()`,
- * `.patch()`, and `.delete()` in M3. Containers and scripts land in M4.
+ * `.patch()`, `.delete()`, and `.script()` (record-scope FileMaker script
+ * invocation, v0.1.4+). Containers land later in M4.
  */
 
 import type { FMOData } from './client.js'

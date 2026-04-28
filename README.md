@@ -4,10 +4,10 @@
 
 **A tiny, type-safe OData v4 client built for FileMaker Server.**
 
-Zero runtime dependencies · ~3 KB gzipped · One ES module · Web Viewer / Browser / Node 18+
+Zero runtime dependencies · ~3.8 KB gzipped · One ES module · Web Viewer / Browser / Node 18+
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Bundle](https://img.shields.io/badge/gzip-~3%20KB-brightgreen)](#)
+[![Bundle](https://img.shields.io/badge/gzip-~3.8%20KB-brightgreen)](#)
 [![Deps](https://img.shields.io/badge/runtime%20deps-0-blue)](#)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](#)
 [![License](https://img.shields.io/badge/license-MIT-black)](./LICENSE)
@@ -22,19 +22,23 @@ FileMaker Server speaks OData v4, but the spec has sharp corners and FMS has qui
 
 > **Battle-tested in production.** I've been using this library heavily to let FileMaker Web Viewer instances talk to the *same* hosted database they live in — and the performance has been genuinely impressive. Queries that used to require round-tripping through scripts and set-field loops now resolve in a single OData call, with noticeably lower latency and a much cleaner code path. If you're building rich Web Viewer UIs backed by FMS, this is the fastest route I've found.
 
-- **Tiny.** Single ES module, zero runtime dependencies, ~3 KB gzipped.
+- **Tiny.** Single ES module, zero runtime dependencies, ~3.8 KB gzipped.
 - **Type-safe.** Fluent, chainable query builder with full TS inference.
 - **Runs anywhere.** Drop it into a FileMaker Web Viewer, a browser, or Node 18+.
-- **FMS-aware.** Handles the three documented FMS OData deviations for you.
+- **FMS-aware.** Handles the documented FMS OData deviations for you.
+- **Scripts built in.** Invoke FileMaker scripts at database, entity-set, or record scope with a single call.
 - **Resilient.** Basic/Bearer auth with 401 retry, `AbortSignal`, and timeouts built in.
-- **Honest errors.** Every failure becomes a normalized `FMODataError`.
+- **Honest errors.** Every failure becomes a normalized `FMODataError` (or `FMScriptError` for script failures).
 
 ## Status
 
-| Milestone | Scope                                                             | State |
-| --------- | ----------------------------------------------------------------- | :---: |
-| **M1–M3** | Query builder · collection GET · single-entity CRUD · auth · errors | Done |
-| **M4–M6** | Containers · scripts · `$metadata` · `$batch`                      | In Progress |
+| Milestone   | Scope                                                             | State |
+| ----------- | ----------------------------------------------------------------- | :---: |
+| **M1–M3**   | Query builder · collection GET · single-entity CRUD · auth · errors | Done |
+| **M4 · 1/4**| Script execution (database / entity-set / record scope)            | Done (v0.1.4) |
+| **M4 · 2/4**| Containers (binary upload / download)                              | Next |
+| **M4 · 3/4**| `$metadata` (schema introspection)                                 | Planned |
+| **M4 · 4/4**| `$batch` (multipart with changesets)                               | Planned |
 
 Full roadmap and changes live in [`CHANGELOG.md`](./CHANGELOG.md).
 
@@ -99,6 +103,40 @@ const created = await db.from('contact').create({
 const row = await db.from('contact').byKey(created.id).get()
 await db.from('contact').byKey(row.id).patch({ first_name: 'A.' })
 await db.from('contact').byKey(row.id).delete()
+```
+
+## FileMaker scripts
+
+Invoke FMS-side FileMaker scripts at three scopes. The optional `parameter`
+becomes `Get(ScriptParameter)` inside the script; the script's text result is
+returned as `scriptResult`.
+
+```ts
+// Database scope
+const { scriptResult } = await db.script('Ping', { parameter: 'hello' })
+
+// Entity-set scope (script runs with the table as context)
+await db.from('contact').script('RebuildIndex')
+
+// Single-record scope (script's current record is set to this row)
+await db.from('contact').byKey(42).script('Archive')
+```
+
+A non-zero `scriptError` becomes an `FMScriptError` (subclass of
+`FMODataError`), so existing error handlers keep working:
+
+```ts
+import { FMScriptError } from 'fm-odata-js'
+
+try {
+  await db.script('Risky')
+} catch (err) {
+  if (err instanceof FMScriptError) {
+    console.error(`FM script error ${err.scriptError}: ${err.scriptResult}`)
+  } else {
+    throw err
+  }
+}
 ```
 
 ## Live integration tests

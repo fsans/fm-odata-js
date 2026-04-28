@@ -9,13 +9,16 @@
 //   FM_ODATA_USER              FMS account with OData privileges
 //   FM_ODATA_PASSWORD          matching password
 //   FM_ODATA_INSECURE_TLS=1    optional, for self-signed LAN certs
+//   FM_ODATA_PING_SCRIPT       optional, name of a script to invoke at the
+//                              end of the run (defaults to "Ping" if present;
+//                              silently skipped if FMS reports it missing).
 //
 // Run:
 //   npm install
 //   node --env-file=../../.env index.mjs     # Node 20.6+
 //   # or: export the vars yourself and: node index.mjs
 
-import { FMOData, basicAuth, FMODataError } from 'fm-odata-js'
+import { FMOData, basicAuth, FMODataError, FMScriptError } from 'fm-odata-js'
 
 const {
   FM_ODATA_HOST,
@@ -23,6 +26,7 @@ const {
   FM_ODATA_USER,
   FM_ODATA_PASSWORD,
   FM_ODATA_INSECURE_TLS,
+  FM_ODATA_PING_SCRIPT,
 } = process.env
 
 for (const [name, val] of Object.entries({
@@ -68,4 +72,24 @@ for (const table of ['contact', 'address', 'email', 'phone']) {
     }
   }
   console.log()
+}
+
+// --- Script demo ----------------------------------------------------------
+// Calls a FileMaker script at database scope and prints its result. Add a
+// script named "Ping" (or set FM_ODATA_PING_SCRIPT) to your solution that
+// does:  Exit Script [Text Result: Get(ScriptParameter)]
+const scriptName = FM_ODATA_PING_SCRIPT ?? 'Ping'
+try {
+  const { scriptResult, scriptError } = await db.script(scriptName, {
+    parameter: 'hello-from-fm-odata-js',
+  })
+  console.log(`script    ${scriptName} => result=${JSON.stringify(scriptResult)} error=${scriptError}`)
+} catch (err) {
+  if (err instanceof FMScriptError && err.scriptError === '104') {
+    console.log(`script    ${scriptName} not present in this solution (FM error 104) — skipping`)
+  } else if (err instanceof FMODataError) {
+    console.log(`script    ${scriptName} HTTP ${err.status} ${err.code ?? ''} ${err.message}`)
+  } else {
+    throw err
+  }
 }
