@@ -8,6 +8,7 @@
  */
 import type { FMOData } from './client.js';
 import { EntityRef } from './entity.js';
+import { type ScriptOptions, type ScriptResult } from './scripts.js';
 import type { RequestOptions } from './types.js';
 import { type ODataLiteral } from './url.js';
 /**
@@ -103,6 +104,14 @@ export declare class Query<T = Record<string, unknown>> {
      * Execute the query. Returns the parsed OData collection envelope.
      */
     get(opts?: RequestOptions): Promise<QueryResult<T>>;
+    /**
+     * Invoke a FileMaker script in the context of this query's entity set.
+     *
+     * Filter / select / orderby / paging state on the `Query` is **ignored** —
+     * the underlying OData Action only cares about the entity set. Use
+     * `EntityRef#script` to run a script in the context of a specific record.
+     */
+    script(name: string, opts?: ScriptOptions): Promise<ScriptResult>;
 }
 /**
  * Serialize query options either as a top-level querystring (percent-encoded)

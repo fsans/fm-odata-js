@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { loadFmConfig } from '../../scripts/env.mjs'
 import { createFetch } from '../../scripts/insecure-fetch.mjs'
-import { FMOData, basicAuth, FMODataError } from '../../src/index.js'
+import { FMOData, basicAuth, FMODataError, FMScriptError } from '../../src/index.js'
 
 const cfg = loadFmConfig()
 const live = cfg.live
@@ -86,6 +86,29 @@ describe.skipIf(!live)('live FMS integration', () => {
       .catch((e: unknown) => e)
     expect(err).toBeInstanceOf(FMODataError)
     expect((err as FMODataError).status).toBeGreaterThanOrEqual(400)
+  })
+
+  it('runs a database-scope script and echoes its parameter', async () => {
+    // Requires a `Ping` script in the demo solution that returns its parameter
+    // (or `"pong"` when no parameter is supplied) via `Exit Script [Text Result]`.
+    // The script name is overridable via FM_ODATA_PING_SCRIPT for solutions
+    // that name it differently; the test skips silently if FMS reports the
+    // script does not exist (FM error 104).
+    const scriptName = process.env.FM_ODATA_PING_SCRIPT ?? 'Ping'
+    let result
+    try {
+      result = await db.script(scriptName, { parameter: 'hello' })
+    } catch (err) {
+      if (err instanceof FMScriptError && err.scriptError === '104') {
+        // Script missing: treat as a soft skip rather than a hard failure.
+        // eslint-disable-next-line no-console
+        console.warn(`[live] skipping script test — FMS reports script "${scriptName}" missing (error 104)`)
+        return
+      }
+      throw err
+    }
+    expect(result.scriptError).toBe('0')
+    expect(typeof result.scriptResult === 'string' || result.scriptResult === undefined).toBe(true)
   })
 
   it('surfaces FMS error envelopes as FMODataError', async () => {

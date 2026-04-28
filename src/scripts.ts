@@ -1,2 +1,211 @@
-/** FileMaker script execution endpoints. Implemented in M4. */
-export {}
+/**
+ * FileMaker script invocation.
+ *
+ * FMS exposes FileMaker scripts through the OData v4 Action mechanism at a
+ * `Script.<ScriptName>` path suffix. Scripts can be invoked at three scopes:
+ *
+ *   POST /<db>/Script.<name>                       // database-level
+ *   POST /<db>/<EntitySet>/Script.<name>           // entity-set context
+ *   POST /<db>/<EntitySet>(<key>)/Script.<name>    // single-record context
+ *
+ * The optional parameter is sent as `{ "scriptParameter": "<string>" }`. The
+ * response envelope is `{ "scriptResult": "...", "scriptError": "0" }`; a
+ * non-zero `scriptError` becomes an `FMScriptError`.
+ */
+
+import type { FMOData } from './client.js'
+import { FMScriptError } from './errors.js'
+import { executeJson } from './http.js'
+import type { RequestOptions } from './types.js'
+import {
+  encodePathSegment,
+  escapeStringLiteral,
+  type ODataLiteral,
+} from './url.js'
+
+/** Options accepted by a script invocation. */
+export interface ScriptOptions extends RequestOptions {
+  /**
+   * Optional script parameter. Serialized to the FMS `scriptParameter` field
+   * in the request body. If omitted, the body is empty and the script runs
+   * with no parameter (FileMaker's `Get(ScriptParameter)` returns empty).
+   */
+  parameter?: string
+}
+
+/**
+ * Result envelope returned by a successful script invocation. A non-zero
+ * `scriptError` is promoted to an `FMScriptError` before reaching the caller,
+ * so values you receive here always represent success (`scriptError === "0"`).
+ */
+export interface ScriptResult {
+  /** Raw value returned by `Exit Script [Text Result: ...]`. */
+  scriptResult?: string
+  /** Always `"0"` in a resolved result; non-zero raises `FMScriptError`. */
+  scriptError: string
+  /** Full parsed response body, for forward-compatible field access. */
+  raw: unknown
+}
+
+/** Format an OData primary-key literal for embedding in a URL path. */
+function formatKey(key: ODataLiteral): string {
+  if (typeof key === 'number') {
+    if (!Number.isFinite(key)) {
+      throw new TypeError('ScriptInvoker: key must be a finite number')
+    }
+    return String(key)
+  }
+  if (typeof key === 'string') return `'${escapeStringLiteral(key)}'`
+  if (typeof key === 'boolean') return key ? 'true' : 'false'
+  throw new TypeError('ScriptInvoker: unsupported key type')
+}
+
+/** Scope describing where a `ScriptInvoker` is rooted. */
+export interface ScriptScope {
+  /** When omitted the script runs at database scope. */
+  entitySet?: string
+  /** When present alongside `entitySet`, the script runs at record scope. */
+  key?: ODataLiteral
+}
+
+/**
+ * Low-level handle used internally by `FMOData#script`, `Query#script`, and
+ * `EntityRef#script`. Exposed so advanced callers can build their own
+ * invocation paths if needed.
+ */
+export class ScriptInvoker {
+  /** @internal */ readonly _client: FMOData
+  readonly entitySet: string | undefined
+  readonly key: ODataLiteral | undefined
+
+  constructor(client: FMOData, scope: ScriptScope = {}) {
+    this._client = client
+    if (scope.entitySet !== undefined) this.entitySet = scope.entitySet
+    if (scope.key !== undefined) this.key = scope.key
+  }
+
+  /** Build the absolute URL for invoking `name` at this scope. */
+  url(name: string): string {
+    if (!name) throw new TypeError('ScriptInvoker: script name is required')
+    const base = this._client.baseUrl
+    const scriptSegment = `Script.${encodePathSegment(name)}`
+    if (this.entitySet === undefined) {
+      return `${base}/${scriptSegment}`
+    }
+    const setSegment = encodePathSegment(this.entitySet)
+    if (this.key === undefined) {
+      return `${base}/${setSegment}/${scriptSegment}`
+    }
+    return `${base}/${setSegment}(${formatKey(this.key)})/${scriptSegment}`
+  }
+
+  /** Invoke the script. Resolves to a `ScriptResult` on success. */
+  async run(name: string, opts: ScriptOptions = {}): Promise<ScriptResult> {
+    const url = this.url(name)
+    const headers: Record<string, string> = {}
+    let body: string | undefined
+    if (opts.parameter !== undefined) {
+      headers['Content-Type'] = 'application/json'
+      body = JSON.stringify({ scriptParameter: opts.parameter })
+    }
+
+    const method = 'POST'
+    const json = await executeJson<unknown>(this._client._ctx, url, {
+      method,
+      headers,
+      ...(body !== undefined ? { body } : {}),
+      accept: 'json',
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    })
+
+    return parseScriptEnvelope(json, { url, method })
+  }
+}
+
+/**
+ * Parse the `{ scriptResult, scriptError }` envelope FMS returns from a
+ * script action, promoting a non-zero `scriptError` to `FMScriptError`.
+ *
+ * @internal
+ */
+export function parseScriptEnvelope(
+  raw: unknown,
+  request: { url: string; method: string },
+): ScriptResult {
+  // FMS may wrap the envelope under a single top-level key in some versions;
+  // tolerate both shapes by looking for the fields at depth 0 or 1.
+  const envelope = extractEnvelope(raw)
+
+  const scriptError =
+    envelope.scriptError !== undefined ? String(envelope.scriptError) : '0'
+  const scriptResult =
+    envelope.scriptResult !== undefined ? String(envelope.scriptResult) : undefined
+
+  if (scriptError !== '0') {
+    throw new FMScriptError(
+      `FileMaker script error ${scriptError}`,
+      {
+        status: 200,
+        scriptError,
+        ...(scriptResult !== undefined ? { scriptResult } : {}),
+        odataError: raw,
+        request,
+      },
+    )
+  }
+
+  const out: ScriptResult = { scriptError, raw }
+  if (scriptResult !== undefined) out.scriptResult = scriptResult
+  return out
+}
+
+function extractEnvelope(raw: unknown): {
+  scriptResult?: unknown
+  scriptError?: unknown
+} {
+  if (raw === null || typeof raw !== 'object') return {}
+  const obj = raw as Record<string, unknown>
+  if ('scriptError' in obj || 'scriptResult' in obj) {
+    return obj as { scriptResult?: unknown; scriptError?: unknown }
+  }
+  // Some callers may see the envelope nested under a single wrapping key.
+  for (const v of Object.values(obj)) {
+    if (v && typeof v === 'object') {
+      const inner = v as Record<string, unknown>
+      if ('scriptError' in inner || 'scriptResult' in inner) {
+        return inner as { scriptResult?: unknown; scriptError?: unknown }
+      }
+    }
+  }
+  return {}
+}
+
+/** @internal — convenience factory used by client/query/entity helpers. */
+export function runScriptAtDatabase(
+  client: FMOData,
+  name: string,
+  opts?: ScriptOptions,
+): Promise<ScriptResult> {
+  return new ScriptInvoker(client).run(name, opts)
+}
+
+/** @internal */
+export function runScriptAtEntitySet(
+  client: FMOData,
+  entitySet: string,
+  name: string,
+  opts?: ScriptOptions,
+): Promise<ScriptResult> {
+  return new ScriptInvoker(client, { entitySet }).run(name, opts)
+}
+
+/** @internal */
+export function runScriptAtEntity(
+  client: FMOData,
+  entitySet: string,
+  key: ODataLiteral,
+  name: string,
+  opts?: ScriptOptions,
+): Promise<ScriptResult> {
+  return new ScriptInvoker(client, { entitySet, key }).run(name, opts)
+}

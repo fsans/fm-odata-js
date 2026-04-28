@@ -3,6 +3,7 @@
  * `.patch()`, and `.delete()` in M3. Containers and scripts land in M4.
  */
 import type { FMOData } from './client.js';
+import { type ScriptOptions, type ScriptResult } from './scripts.js';
 import type { RequestOptions } from './types.js';
 import { type ODataLiteral } from './url.js';
 /** Options accepted by mutating entity operations. */
@@ -41,5 +42,10 @@ export declare class EntityRef<T = Record<string, unknown>> {
     patch(body: Partial<T> | Record<string, unknown>, opts?: EntityWriteOptions): Promise<T | undefined>;
     /** `DELETE` the entity. Resolves on success; throws `FMODataError` otherwise. */
     delete(opts?: EntityWriteOptions): Promise<void>;
+    /**
+     * Invoke a FileMaker script in the context of this single record. FMS sets
+     * the script's current record to this entity before running it.
+     */
+    script(name: string, opts?: ScriptOptions): Promise<ScriptResult>;
 }
 //# sourceMappingURL=entity.d.ts.map

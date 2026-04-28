@@ -1,3 +1,78 @@
-/** FileMaker script execution endpoints. Implemented in M4. */
-export {};
+/**
+ * FileMaker script invocation.
+ *
+ * FMS exposes FileMaker scripts through the OData v4 Action mechanism at a
+ * `Script.<ScriptName>` path suffix. Scripts can be invoked at three scopes:
+ *
+ *   POST /<db>/Script.<name>                       // database-level
+ *   POST /<db>/<EntitySet>/Script.<name>           // entity-set context
+ *   POST /<db>/<EntitySet>(<key>)/Script.<name>    // single-record context
+ *
+ * The optional parameter is sent as `{ "scriptParameter": "<string>" }`. The
+ * response envelope is `{ "scriptResult": "...", "scriptError": "0" }`; a
+ * non-zero `scriptError` becomes an `FMScriptError`.
+ */
+import type { FMOData } from './client.js';
+import type { RequestOptions } from './types.js';
+import { type ODataLiteral } from './url.js';
+/** Options accepted by a script invocation. */
+export interface ScriptOptions extends RequestOptions {
+    /**
+     * Optional script parameter. Serialized to the FMS `scriptParameter` field
+     * in the request body. If omitted, the body is empty and the script runs
+     * with no parameter (FileMaker's `Get(ScriptParameter)` returns empty).
+     */
+    parameter?: string;
+}
+/**
+ * Result envelope returned by a successful script invocation. A non-zero
+ * `scriptError` is promoted to an `FMScriptError` before reaching the caller,
+ * so values you receive here always represent success (`scriptError === "0"`).
+ */
+export interface ScriptResult {
+    /** Raw value returned by `Exit Script [Text Result: ...]`. */
+    scriptResult?: string;
+    /** Always `"0"` in a resolved result; non-zero raises `FMScriptError`. */
+    scriptError: string;
+    /** Full parsed response body, for forward-compatible field access. */
+    raw: unknown;
+}
+/** Scope describing where a `ScriptInvoker` is rooted. */
+export interface ScriptScope {
+    /** When omitted the script runs at database scope. */
+    entitySet?: string;
+    /** When present alongside `entitySet`, the script runs at record scope. */
+    key?: ODataLiteral;
+}
+/**
+ * Low-level handle used internally by `FMOData#script`, `Query#script`, and
+ * `EntityRef#script`. Exposed so advanced callers can build their own
+ * invocation paths if needed.
+ */
+export declare class ScriptInvoker {
+    /** @internal */ readonly _client: FMOData;
+    readonly entitySet: string | undefined;
+    readonly key: ODataLiteral | undefined;
+    constructor(client: FMOData, scope?: ScriptScope);
+    /** Build the absolute URL for invoking `name` at this scope. */
+    url(name: string): string;
+    /** Invoke the script. Resolves to a `ScriptResult` on success. */
+    run(name: string, opts?: ScriptOptions): Promise<ScriptResult>;
+}
+/**
+ * Parse the `{ scriptResult, scriptError }` envelope FMS returns from a
+ * script action, promoting a non-zero `scriptError` to `FMScriptError`.
+ *
+ * @internal
+ */
+export declare function parseScriptEnvelope(raw: unknown, request: {
+    url: string;
+    method: string;
+}): ScriptResult;
+/** @internal — convenience factory used by client/query/entity helpers. */
+export declare function runScriptAtDatabase(client: FMOData, name: string, opts?: ScriptOptions): Promise<ScriptResult>;
+/** @internal */
+export declare function runScriptAtEntitySet(client: FMOData, entitySet: string, name: string, opts?: ScriptOptions): Promise<ScriptResult>;
+/** @internal */
+export declare function runScriptAtEntity(client: FMOData, entitySet: string, key: ODataLiteral, name: string, opts?: ScriptOptions): Promise<ScriptResult>;
 //# sourceMappingURL=scripts.d.ts.map

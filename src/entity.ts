@@ -5,6 +5,7 @@
 
 import type { FMOData } from './client.js'
 import { executeJson, executeRequest } from './http.js'
+import { runScriptAtEntity, type ScriptOptions, type ScriptResult } from './scripts.js'
 import type { RequestOptions } from './types.js'
 import {
   encodePathSegment,
@@ -111,6 +112,14 @@ export class EntityRef<T = Record<string, unknown>> {
       accept: 'none',
       ...(opts.signal ? { signal: opts.signal } : {}),
     })
+  }
+
+  /**
+   * Invoke a FileMaker script in the context of this single record. FMS sets
+   * the script's current record to this entity before running it.
+   */
+  async script(name: string, opts: ScriptOptions = {}): Promise<ScriptResult> {
+    return runScriptAtEntity(this._client, this.entitySet, this.key, name, opts)
   }
 }
 

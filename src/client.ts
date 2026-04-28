@@ -1,5 +1,6 @@
 import { executeJson, executeRequest, type HttpClientContext, type HttpRequestOptions } from './http.js'
 import { Query } from './query.js'
+import { runScriptAtDatabase, type ScriptOptions, type ScriptResult } from './scripts.js'
 import type { FMODataOptions, RequestOptions } from './types.js'
 
 /**
@@ -63,6 +64,20 @@ export class FMOData {
    */
   async rawRequest(pathOrUrl: string, opts: HttpRequestOptions = {}): Promise<Response> {
     return executeRequest(this._ctx, this._resolveUrl(pathOrUrl), opts)
+  }
+
+  /**
+   * Invoke a FileMaker script at database scope.
+   *
+   * ```ts
+   * const result = await db.script('Ping', { parameter: 'hello' })
+   * console.log(result.scriptResult) // => string value returned by the script
+   * ```
+   *
+   * A non-zero `scriptError` is thrown as `FMScriptError`.
+   */
+  async script(name: string, opts: ScriptOptions = {}): Promise<ScriptResult> {
+    return runScriptAtDatabase(this, name, opts)
   }
 
   /** @internal */

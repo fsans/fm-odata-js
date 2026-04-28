@@ -41,6 +41,19 @@ async function parseErrorResponse(res, request) {
   }
   return new FMODataError(message, { status, ...code !== void 0 ? { code } : {}, odataError, request });
 }
+var FMScriptError = class extends FMODataError {
+  constructor(message, init) {
+    super(message, {
+      status: init.status,
+      code: init.scriptError,
+      ...init.odataError !== void 0 ? { odataError: init.odataError } : {},
+      ...init.request !== void 0 ? { request: init.request } : {}
+    });
+    this.name = "FMScriptError";
+    this.scriptError = init.scriptError;
+    if (init.scriptResult !== void 0) this.scriptResult = init.scriptResult;
+  }
+};
 
 // src/http.ts
 var AUTH_SCHEME_RE = /^(basic|bearer|negotiate|digest)\s+\S/i;
@@ -177,8 +190,106 @@ function buildQueryString(params) {
   return parts.join("&");
 }
 
-// src/entity.ts
+// src/scripts.ts
 function formatKey(key) {
+  if (typeof key === "number") {
+    if (!Number.isFinite(key)) {
+      throw new TypeError("ScriptInvoker: key must be a finite number");
+    }
+    return String(key);
+  }
+  if (typeof key === "string") return `'${escapeStringLiteral(key)}'`;
+  if (typeof key === "boolean") return key ? "true" : "false";
+  throw new TypeError("ScriptInvoker: unsupported key type");
+}
+var ScriptInvoker = class {
+  constructor(client, scope = {}) {
+    this._client = client;
+    if (scope.entitySet !== void 0) this.entitySet = scope.entitySet;
+    if (scope.key !== void 0) this.key = scope.key;
+  }
+  /** Build the absolute URL for invoking `name` at this scope. */
+  url(name) {
+    if (!name) throw new TypeError("ScriptInvoker: script name is required");
+    const base = this._client.baseUrl;
+    const scriptSegment = `Script.${encodePathSegment(name)}`;
+    if (this.entitySet === void 0) {
+      return `${base}/${scriptSegment}`;
+    }
+    const setSegment = encodePathSegment(this.entitySet);
+    if (this.key === void 0) {
+      return `${base}/${setSegment}/${scriptSegment}`;
+    }
+    return `${base}/${setSegment}(${formatKey(this.key)})/${scriptSegment}`;
+  }
+  /** Invoke the script. Resolves to a `ScriptResult` on success. */
+  async run(name, opts = {}) {
+    const url = this.url(name);
+    const headers = {};
+    let body;
+    if (opts.parameter !== void 0) {
+      headers["Content-Type"] = "application/json";
+      body = JSON.stringify({ scriptParameter: opts.parameter });
+    }
+    const method = "POST";
+    const json = await executeJson(this._client._ctx, url, {
+      method,
+      headers,
+      ...body !== void 0 ? { body } : {},
+      accept: "json",
+      ...opts.signal ? { signal: opts.signal } : {}
+    });
+    return parseScriptEnvelope(json, { url, method });
+  }
+};
+function parseScriptEnvelope(raw, request) {
+  const envelope = extractEnvelope(raw);
+  const scriptError = envelope.scriptError !== void 0 ? String(envelope.scriptError) : "0";
+  const scriptResult = envelope.scriptResult !== void 0 ? String(envelope.scriptResult) : void 0;
+  if (scriptError !== "0") {
+    throw new FMScriptError(
+      `FileMaker script error ${scriptError}`,
+      {
+        status: 200,
+        scriptError,
+        ...scriptResult !== void 0 ? { scriptResult } : {},
+        odataError: raw,
+        request
+      }
+    );
+  }
+  const out = { scriptError, raw };
+  if (scriptResult !== void 0) out.scriptResult = scriptResult;
+  return out;
+}
+function extractEnvelope(raw) {
+  if (raw === null || typeof raw !== "object") return {};
+  const obj = raw;
+  if ("scriptError" in obj || "scriptResult" in obj) {
+    return obj;
+  }
+  for (const v of Object.values(obj)) {
+    if (v && typeof v === "object") {
+      const inner = v;
+      if ("scriptError" in inner || "scriptResult" in inner) {
+        return inner;
+      }
+    }
+  }
+  return {};
+}
+function runScriptAtDatabase(client, name, opts) {
+  return new ScriptInvoker(client).run(name, opts);
+}
+function runScriptAtEntitySet(client, entitySet, name, opts) {
+  return new ScriptInvoker(client, { entitySet }).run(name, opts);
+}
+function runScriptAtEntity(client, entitySet, key, name, opts) {
+  return new ScriptInvoker(client, { entitySet, key }).run(name, opts);
+}
+
+// src/entity.ts
+function formatKey2(key) {
   if (typeof key === "number") {
     if (!Number.isFinite(key)) {
       throw new TypeError("EntityRef: key must be a finite number");
@@ -197,7 +308,7 @@ var EntityRef = class {
   }
   /** Absolute URL for this entity. */
   toURL() {
-    return `${this._client.baseUrl}/${encodePathSegment(this.entitySet)}(${formatKey(this.key)})`;
+    return `${this._client.baseUrl}/${encodePathSegment(this.entitySet)}(${formatKey2(this.key)})`;
   }
   /** `GET` the entity. Returns the parsed JSON row. */
   async get(opts = {}) {
@@ -238,6 +349,13 @@ var EntityRef = class {
       accept: "none",
       ...opts.signal ? { signal: opts.signal } : {}
     });
+  }
+  /**
+   * Invoke a FileMaker script in the context of this single record. FMS sets
+   * the script's current record to this entity before running it.
+   */
+  async script(name, opts = {}) {
+    return runScriptAtEntity(this._client, this.entitySet, this.key, name, opts);
   }
 };
 
@@ -391,6 +509,19 @@ var Query = class _Query {
     if (json && typeof json["@odata.nextLink"] === "string") out.nextLink = json["@odata.nextLink"];
     return out;
   }
+  /**
+   * Invoke a FileMaker script in the context of this query's entity set.
+   *
+   * Filter / select / orderby / paging state on the `Query` is **ignored** —
+   * the underlying OData Action only cares about the entity set. Use
+   * `EntityRef#script` to run a script in the context of a specific record.
+   */
+  async script(name, opts = {}) {
+    if (!this._client) {
+      throw new Error("Query#script: no client attached (use FMOData#from)");
+    }
+    return runScriptAtEntitySet(this._client, this._entitySet, name, opts);
+  }
 };
 function serializeOptions(s, opts) {
   const pairs = [];
@@ -467,6 +598,19 @@ var FMOData = class {
   async rawRequest(pathOrUrl, opts = {}) {
     return executeRequest(this._ctx, this._resolveUrl(pathOrUrl), opts);
   }
+  /**
+   * Invoke a FileMaker script at database scope.
+   *
+   * ```ts
+   * const result = await db.script('Ping', { parameter: 'hello' })
+   * console.log(result.scriptResult) // => string value returned by the script
+   * ```
+   *
+   * A non-zero `scriptError` is thrown as `FMScriptError`.
+   */
+  async script(name, opts = {}) {
+    return runScriptAtDatabase(this, name, opts);
+  }
   /** @internal */
   _resolveUrl(pathOrUrl) {
     if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
@@ -478,8 +622,10 @@ export {
   EntityRef,
   FMOData,
   FMODataError,
+  FMScriptError,
   Filter,
   Query,
+  ScriptInvoker,
   basicAuth,
   filterFactory
 };

@@ -1,5 +1,6 @@
 import { type HttpClientContext, type HttpRequestOptions } from './http.js';
 import { Query } from './query.js';
+import { type ScriptOptions, type ScriptResult } from './scripts.js';
 import type { FMODataOptions, RequestOptions } from './types.js';
 /**
  * `FMOData` is the entrypoint for all OData operations against a FileMaker
@@ -33,6 +34,17 @@ export declare class FMOData {
      * object directly (useful for binary / streaming responses).
      */
     rawRequest(pathOrUrl: string, opts?: HttpRequestOptions): Promise<Response>;
+    /**
+     * Invoke a FileMaker script at database scope.
+     *
+     * ```ts
+     * const result = await db.script('Ping', { parameter: 'hello' })
+     * console.log(result.scriptResult) // => string value returned by the script
+     * ```
+     *
+     * A non-zero `scriptError` is thrown as `FMScriptError`.
+     */
+    script(name: string, opts?: ScriptOptions): Promise<ScriptResult>;
     /** @internal */
     _resolveUrl(pathOrUrl: string): string;
 }

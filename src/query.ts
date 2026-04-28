@@ -10,6 +10,7 @@
 import type { FMOData } from './client.js'
 import { EntityRef } from './entity.js'
 import { executeJson } from './http.js'
+import { runScriptAtEntitySet, type ScriptOptions, type ScriptResult } from './scripts.js'
 import type { RequestOptions } from './types.js'
 import {
   buildQueryString,
@@ -265,6 +266,20 @@ export class Query<T = Record<string, unknown>> {
     if (json && typeof json['@odata.count'] === 'number') out.count = json['@odata.count']
     if (json && typeof json['@odata.nextLink'] === 'string') out.nextLink = json['@odata.nextLink']
     return out
+  }
+
+  /**
+   * Invoke a FileMaker script in the context of this query's entity set.
+   *
+   * Filter / select / orderby / paging state on the `Query` is **ignored** —
+   * the underlying OData Action only cares about the entity set. Use
+   * `EntityRef#script` to run a script in the context of a specific record.
+   */
+  async script(name: string, opts: ScriptOptions = {}): Promise<ScriptResult> {
+    if (!this._client) {
+      throw new Error('Query#script: no client attached (use FMOData#from)')
+    }
+    return runScriptAtEntitySet(this._client, this._entitySet, name, opts)
   }
 }
 

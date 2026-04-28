@@ -30,4 +30,28 @@ export declare function parseErrorResponse(res: Response, request: {
     url: string;
     method: string;
 }): Promise<FMODataError>;
+/**
+ * Thrown when a FileMaker script invocation completes with a non-zero
+ * `scriptError`. The HTTP request itself succeeded (the server returned 2xx),
+ * but the script reported an error via the FMS result envelope.
+ *
+ * Subclass of `FMODataError` so existing `instanceof FMODataError` checks and
+ * error-handling code keep working.
+ */
+export declare class FMScriptError extends FMODataError {
+    /** FileMaker script error code as a string (e.g. `"101"`). */
+    readonly scriptError: string;
+    /** Raw `scriptResult` value returned by the script, if any. */
+    readonly scriptResult: string | undefined;
+    constructor(message: string, init: {
+        status: number;
+        scriptError: string;
+        scriptResult?: string;
+        odataError?: unknown;
+        request?: {
+            url: string;
+            method: string;
+        };
+    });
+}
 //# sourceMappingURL=errors.d.ts.map

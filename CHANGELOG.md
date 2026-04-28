@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- M4 Part 1 — FileMaker script execution:
+  - `FMOData#script(name, opts?)`, `Query#script(name, opts?)`, `EntityRef#script(name, opts?)` POST to the FMS `Script.<name>` action endpoint at database, entity-set, or single-record scope.
+  - `ScriptOptions` (`parameter`, `signal`) maps to the FMS `{ "scriptParameter": "..." }` body when provided.
+  - `ScriptResult` envelope (`scriptResult`, `scriptError`, `raw`).
+  - `FMScriptError` (subclass of `FMODataError`) thrown when a script returns a non-zero `scriptError`; HTTP-level failures still surface as plain `FMODataError`.
+  - Public `ScriptInvoker` for advanced callers that need to build invocation paths manually.
+  - 15 new unit tests covering URL construction at all three scopes, parameter encoding, error promotion, envelope unwrapping, 401 retry, and `AbortSignal` propagation.
+  - Optional live integration test: define a `Ping` script in the Contacts demo (or set `FM_ODATA_PING_SCRIPT`) and the live suite will exercise it.
+
 ## [0.1.2] - 2026-04-22
 
 ### Added
