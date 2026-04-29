@@ -8,6 +8,10 @@
  */
 
 import type { FMOData } from './client.js'
+import {
+  buildContainerJsonBody,
+  type ContainerJsonValue,
+} from './containers.js'
 import { EntityRef } from './entity.js'
 import { executeJson } from './http.js'
 import { runScriptAtEntitySet, type ScriptOptions, type ScriptResult } from './scripts.js'
@@ -235,6 +239,43 @@ export class Query<T = Record<string, unknown>> {
       throw new Error('Query#create: no client attached (use FMOData#from)')
     }
     const url = `${this._baseUrl}/${encodePathSegment(this._entitySet)}`
+    const json = await executeJson<T>(this._client._ctx, url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      accept: 'json',
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    })
+    return json
+  }
+
+  /**
+   * `POST` a new entity carrying one or more container fields. Maps to the
+   * Claris "Operation 1" — the request body is a JSON object containing
+   * regular field values plus, for each container field, the base64 data
+   * and the `@com.filemaker.odata.{ContentType,Filename}` annotations.
+   *
+   * Each container value's `data` must already be base64-encoded.
+   *
+   * @example
+   * await db.from('contact').createWithContainers(
+   *   { first_name: 'Bob', last_name: 'Jones' },
+   *   { photo: { data: photoB64, contentType: 'image/png', filename: 'BJONES.png' } },
+   * )
+   */
+  async createWithContainers(
+    regularFields: Partial<T> | Record<string, unknown>,
+    containers: Record<string, ContainerJsonValue>,
+    opts: RequestOptions = {},
+  ): Promise<T> {
+    if (!this._client) {
+      throw new Error('Query#createWithContainers: no client attached (use FMOData#from)')
+    }
+    const url = `${this._baseUrl}/${encodePathSegment(this._entitySet)}`
+    const body = buildContainerJsonBody(
+      containers,
+      regularFields as Record<string, unknown>,
+    )
     const json = await executeJson<T>(this._client._ctx, url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-04-29
+
+### Added
+
+- M4 Part 2 — FileMaker container field I/O:
+  - `EntityRef#container(fieldName) → ContainerRef` handle for per-field binary operations.
+  - `ContainerRef.get()` / `getStream()` download via `GET …/<field>/$value` as a `Blob` or `ReadableStream<Uint8Array>` (with parsed `Content-Type`, `size`, and RFC 6266 `filename`).
+  - `ContainerRef.upload(input)` supports two FMS-documented wire formats, selectable via `input.encoding`:
+    - `'binary'` (default): `PATCH …/<field>` with raw bytes plus `Content-Type` and (optionally) `Content-Disposition: inline; filename="…"`. Restricted to PNG, JPEG, GIF, TIFF, and PDF.
+    - `'base64'`: `PATCH …/<EntitySet>(<key>)` with `{ "<field>": "<base64>", "<field>@com.filemaker.odata.ContentType": "…", "<field>@com.filemaker.odata.Filename": "…" }`. Useful for updating multiple containers (or container + regular fields) in one round-trip.
+  - `ContainerRef.delete()` clears the value via `PATCH …/<EntitySet>(<key>)` with `{ "<field>": null }` (no per-field DELETE endpoint exists on FMS).
+  - `ContainerDownload` / `ContainerUploadInput` types exported (`encoding` and `contentType` are optional).
+- `ContainerUploadInput.contentType` is now optional. When omitted, the library sniffs the MIME from the payload's magic bytes (PNG, JPEG, GIF, TIFF, PDF) and rejects unrecognised payloads up-front. New exported helper `sniffContainerMime(bytes)`.
+- `image/tiff` added to `FM_CONTAINER_SUPPORTED_MIME_TYPES`. Round-trips correctly through the OData container endpoints.
+- `EntityRef#fieldValue<V>(fieldName)` — `GET /<EntitySet>(<key>)/<fieldName>` and unwrap the OData `{ value: … }` envelope. Useful for fetching a single scalar column without composing a `$select` query.
+- `keepalive: true` on every fetch for HTTP connection reuse.
+- 35 container unit tests + 16 entity unit tests (was 23 + 13). Coverage includes TIFF acceptance, PNG/PDF magic-byte sniffing on upload, every `sniffContainerMime` branch, and `fieldValue` (basic / percent-encoded field name / null value).
+- Live integration test: uploads a 68-byte PNG fixture (`tests/fixtures/pixel.png`) to a `photo_content` container on a throw-away contact row, reads it back, asserts byte equality, and clears. Soft-skips when the field is missing in the solution.
+- `docs/filemaker-quirks.md`: new sections documenting (a) FMS rejects `PUT` on the OData endpoint and has no per-field DELETE for record data, (b) the `Accept: application/octet-stream` quirk on `$value`, (c) the `Untitled.png` auto-generated filename, and (d) field-tested observations on `/$count` URL FMS vs FMC, `OData-Version` enforcement, `Edm.Stream` vs `Edm.Binary`, and single-quote escaping in keys.
+- `docs/container-download-problem.md`: investigation log for the Accept-header quirk, marked Resolved.
+- `docs/filemaker-odata-container-guide.md`: full Claris OData container-operations reference vendored into the repo.
+
+### Fixed
+
+- **Container downloads now return binary, not the stored filename string.** `ContainerRef.get()` and `getStream()` now send `Accept: */*` (was `application/octet-stream`). FMS 22 returns the field's stored reference value as `text/plain;charset=utf-8` for the `octet-stream` Accept header — every other Accept value returns the actual binary with the correct `Content-Type`. See [`docs/filemaker-quirks.md`](docs/filemaker-quirks.md). The previous "filename causes file reference" hypothesis was a misdiagnosis; filenames round-trip correctly via `Content-Disposition: attachment; filename="…"`.
+- Live integration test for scripts now soft-skips on FMS's actual "Script not found" HTTP response (a plain `FMODataError` with that message), in addition to the originally-anticipated `scriptError: "104"` envelope path.
+
 ## [0.1.4] - 2026-04-28
 
 ### Added

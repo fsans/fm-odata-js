@@ -42,6 +42,81 @@ FMS returns date-time values as UTC ISO-8601 strings. Both with and without
 milliseconds are observed; the library parses either. When sending values in
 `$filter`, millisecond precision is stripped to avoid round-trip issues.
 
+## Container fields
+
+Claris documents three (and only three) operations for container I/O over
+OData v4. The OData spec's `PUT /<EntitySet>(<key>)/<field>/$value` is **not**
+implemented — FMS responds `400 Bad Request — Unsupported OData operation -
+only GET, POST, PATCH, and DELETE are supported`. `DELETE
+/<EntitySet>(<key>)/<field>/$value` is also not implemented (the only
+documented `DELETE …/<field>` endpoint is the schema-level one under
+`…/FileMaker_Tables/<table>/<field>`, which **drops the column**).
+
+The full reference for the three documented operations lives at
+[`filemaker-odata-container-guide.md`](./filemaker-odata-container-guide.md).
+Summary of what the library does:
+
+| Operation | HTTP | URL | Body | Library API |
+|---|---|---|---|---|
+| Create record with container(s) | `POST` | `/<EntitySet>` | JSON, base64 + `@…Filename`, `@…ContentType` | `Query#create({ field: …, "field@com.filemaker.odata.Filename": … })` or `Query#createWithContainers()` |
+| Update **one** container, raw binary | `PATCH` | `/<EntitySet>(<key>)/<field>` | Raw bytes | `ContainerRef#upload({ encoding: 'binary' })` |
+| Update **one or more** containers (and/or regular fields) | `PATCH` | `/<EntitySet>(<key>)` | JSON, base64 + annotations | `ContainerRef#upload({ encoding: 'base64' })` or `EntityRef#patchContainers()` |
+| Download | `GET` | `/<EntitySet>(<key>)/<field>/$value` | — | `ContainerRef#get()` / `getStream()` |
+| Clear | `PATCH` | `/<EntitySet>(<key>)` | `{ "<field>": null }` | `ContainerRef#delete()` |
+
+### `Accept: application/octet-stream` returns the stored reference, not the bytes
+
+`GET /<EntitySet>(<key>)/<field>/$value` on an `Edm.Binary` container field
+returns the *stored value* (the filename string) as `text/plain;charset=utf-8`
+when the request sends `Accept: application/octet-stream`. Any other Accept
+value — `*/*`, `image/*`, `image/png`, `application/json`, or no header at
+all — returns the actual binary with the correct `Content-Type` (FMS sniffs
+from the magic bytes). The library uses `Accept: */*` for container downloads.
+
+This is the single quirk that broke v0.1.4's container downloads on FMS 22.
+A previous theory — that supplying a filename caused FMS to store a file
+reference instead of embedded binary — turned out to be a misdiagnosis: every
+test was issued with the buggy Accept header. Filenames round-trip correctly
+and surface back via `Content-Disposition: attachment; filename="…"`.
+
+### `Untitled.png` is FMS's auto-generated filename for unnamed uploads
+
+When an upload omits both `Content-Disposition` (binary mode) and
+`@com.filemaker.odata.Filename` (base64 mode), FMS generates the filename
+`Untitled.png` (regardless of the actual MIME) and surfaces it on subsequent
+downloads via `Content-Disposition: attachment; filename="Untitled.png"`. The
+binary itself is correct; only the displayed name is cosmetic. Pass an
+explicit filename on upload to override.
+
+### Supported MIME types
+
+Per the Claris guide, **only** PNG, JPEG, GIF, and PDF are listed. Field
+testing confirms TIFF also round-trips correctly, so the library accepts all
+five. Other binaries (audio, video, ZIP, Office documents, …) may upload
+successfully but FMS will not classify them as a media type and downloads
+will report `text/plain` or `application/octet-stream`. For those, use the
+FileMaker Data API or upload through a FileMaker client directly.
+
+### `Content-Disposition` is unquoted
+
+The Claris doc example uses `Content-Disposition: inline; filename=ALFKI.png`
+(no quotes). FMS appears to mis-parse the RFC 6266 quoted form on some
+deployments. The library emits the unquoted form for ASCII-only filenames and
+falls back to RFC 5987 `filename*=UTF-8''…` for non-ASCII names.
+
+### FileMaker-specific annotations
+
+Container fields in JSON bodies are accompanied by two annotation keys in the
+`com.filemaker.odata` namespace:
+
+- `<Field>@com.filemaker.odata.Filename` — filename stored in the container.
+- `<Field>@com.filemaker.odata.ContentType` — MIME type. FMS still sniffs the
+  first bytes of the base64 data; if the sniffed type conflicts, the sniffed
+  type wins.
+
+Both are optional but recommended; without them the file is stored without a
+filename and the displayed media type may default to `application/octet-stream`.
+
 ## `scriptResult` is always a string
 
 Scripts invoked via `POST /<db>/Script.<name>` return their text result under
@@ -62,3 +137,36 @@ The `scriptError` field follows the same rule: even though it always carries
 a numeric error code, it arrives as a string (e.g. `"0"`, `"101"`). The
 library preserves that wire format on `FMScriptError#scriptError` to keep
 exact-equality comparisons (`err.scriptError === '104'`) reliable.
+
+## Field-tested observations
+
+Behaviours observed against live FMS / FMC instances. Listed for orientation,
+not as bugs to fix.
+
+### `/$count` URL endpoint differs FMS vs FMC
+
+FMS rejects `GET /<EntitySet>/$count` with `400 Bad Request` (documented
+above). FileMaker Cloud appears to accept the suffix-form. Our `Query#count()`
+always emits the inline `?$count=true&$top=0` form, which works on both.
+
+### `OData-Version` headers are required per spec but not enforced in practice
+
+The Claris guide mandates `OData-Version: 4.0` and `OData-MaxVersion: 4.0` on
+every request. FMS 22 happily accepts requests without them. We send them per
+the guide; harmless either way.
+
+### `Edm.Stream` vs `Edm.Binary` for container fields
+
+Some `$metadata` documents declare container properties as `$Type:
+"Edm.Stream"`; FMS 22 (verified on `OData Engine 22.0.4`) actually emits
+`Type="Edm.Binary"`. Either may appear depending on FMS version /
+configuration. Tools relying on `$metadata` should accept both.
+
+### Single-quote escaping in string primary keys
+
+OData requires single quotes inside a string literal to be doubled
+(`'O''Brien'`). The library's `escapeStringLiteral` in
+[`src/url.ts`](../src/url.ts) handles it correctly. Hand-rolled clients
+sometimes skip this step, which silently breaks any string key containing a
+`'` character — worth checking if you're integrating against a different
+implementation.

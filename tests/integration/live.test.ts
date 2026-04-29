@@ -5,7 +5,10 @@
  * Reads connection info from `.env` (see `.env.sample`).
  */
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
+import { afterAll, describe, expect, it } from 'vitest'
 import { loadFmConfig } from '../../scripts/env.mjs'
 import { createFetch } from '../../scripts/insecure-fetch.mjs'
 import { FMOData, basicAuth, FMODataError, FMScriptError } from '../../src/index.js'
@@ -99,16 +102,79 @@ describe.skipIf(!live)('live FMS integration', () => {
     try {
       result = await db.script(scriptName, { parameter: 'hello' })
     } catch (err) {
-      if (err instanceof FMScriptError && err.scriptError === '104') {
-        // Script missing: treat as a soft skip rather than a hard failure.
+      // Two soft-skip paths: FMS may surface "missing script" either as a
+      // 200-with-`scriptError: "104"` (→ FMScriptError) or as an HTTP-level
+      // 4xx with a "Script '<name>' not found" message (→ plain FMODataError).
+      const isMissingScript =
+        (err instanceof FMScriptError && err.scriptError === '104') ||
+        (err instanceof FMODataError && /not found/i.test(err.message))
+      if (isMissingScript) {
         // eslint-disable-next-line no-console
-        console.warn(`[live] skipping script test — FMS reports script "${scriptName}" missing (error 104)`)
+        console.warn(`[live] skipping script test — script "${scriptName}" missing in solution`)
         return
       }
       throw err
     }
     expect(result.scriptError).toBe('0')
     expect(typeof result.scriptResult === 'string' || result.scriptResult === undefined).toBe(true)
+  })
+
+  it('uploads, reads and clears a container field', async () => {
+    // Requires a container field on the contact table. Its name is overridable
+    // via FM_ODATA_CONTAINER_FIELD (defaults to 'photo'). Soft-skips when the
+    // field is missing (FM error 102) so the test stays usable against any
+    // stock Contacts demo.
+    const fieldName = process.env.FM_ODATA_CONTAINER_FIELD ?? 'photo'
+    const here = dirname(fileURLToPath(import.meta.url))
+    const pngBytes = new Uint8Array(readFileSync(resolve(here, '../fixtures/pixel.png')))
+
+    // Create a fresh row to own the container.
+    const created = await db
+      .from<Record<string, unknown>>(cfg.tables.contact)
+      .create({
+        first_name: 'fm-odata-js',
+        last_name: `container-test-${Date.now()}`,
+      })
+    const pkField = findPrimaryKey(created)
+    expect(pkField, 'created row must include a primary key').not.toBeNull()
+    const key = created[pkField!] as string | number
+    createdContactKeys.push(key)
+
+    const container = db.from(cfg.tables.contact).byKey(key).container(fieldName)
+
+    // UPLOAD — no filename so FMS stores embedded binary (not a file reference).
+    // On FMS 22, providing a filename causes $value to return the filename string
+    // instead of the bytes. See docs/filemaker-quirks.md.
+    try {
+      await container.upload({
+        data: pngBytes,
+        contentType: 'image/png',
+      })
+    } catch (err) {
+      // Soft-skip when the field is missing in the solution.
+      // FMS surfaces this as either FM error 102 (Field is missing), error 7
+      // ("does not exist in any table"), or a 404 status — match all three.
+      const isMissingField =
+        err instanceof FMODataError &&
+        (err.code === '102' ||
+          err.status === 404 ||
+          /does not exist|not found/i.test(err.message))
+      if (isMissingField) {
+        console.warn(`[live] skipping container test — field "${fieldName}" missing in solution`)
+        return
+      }
+      throw err
+    }
+
+    // READ BACK
+    const dl = await container.get()
+    expect(dl.contentType.toLowerCase()).toContain('image/')
+    expect(dl.size).toBe(pngBytes.byteLength)
+    const roundTripped = new Uint8Array(await dl.blob.arrayBuffer())
+    expect(Array.from(roundTripped)).toEqual(Array.from(pngBytes))
+
+    // CLEAR
+    await container.delete()
   })
 
   it('surfaces FMS error envelopes as FMODataError', async () => {

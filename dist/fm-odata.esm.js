@@ -107,6 +107,8 @@ async function executeRequestImpl(ctx, url, opts, retried) {
   const method = opts.method ?? "GET";
   const headers = new Headers(opts.headers);
   headers.set("Authorization", await resolveAuthHeader(ctx.token));
+  if (!headers.has("OData-Version")) headers.set("OData-Version", "4.0");
+  if (!headers.has("OData-MaxVersion")) headers.set("OData-MaxVersion", "4.0");
   if (!headers.has("Accept")) {
     headers.set("Accept", ACCEPT_DEFAULTS[opts.accept ?? "json"]);
   }
@@ -118,6 +120,7 @@ async function executeRequestImpl(ctx, url, opts, retried) {
     res = await ctx.fetch(url, {
       method,
       headers,
+      keepalive: true,
       ...opts.body !== void 0 ? { body: opts.body } : {},
       ...signal ? { signal } : {}
     });
@@ -188,6 +191,258 @@ function buildQueryString(params) {
     parts.push(`${k}=${encodeURIComponent(v)}`);
   }
   return parts.join("&");
+}
+
+// src/containers.ts
+var FM_CONTAINER_SUPPORTED_MIME_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/tiff",
+  "application/pdf"
+];
+function normalizeMime(value) {
+  return (value.split(";")[0] ?? "").trim().toLowerCase();
+}
+function isSupportedContainerMime(value) {
+  const normalized = normalizeMime(value);
+  return FM_CONTAINER_SUPPORTED_MIME_TYPES.includes(normalized);
+}
+function sniffContainerMime(bytes) {
+  if (bytes.length >= 8 && bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71 && bytes[4] === 13 && bytes[5] === 10 && bytes[6] === 26 && bytes[7] === 10) {
+    return "image/png";
+  }
+  if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) {
+    return "image/jpeg";
+  }
+  if (bytes.length >= 4 && bytes[0] === 71 && bytes[1] === 73 && bytes[2] === 70 && bytes[3] === 56) {
+    return "image/gif";
+  }
+  if (bytes.length >= 4 && (bytes[0] === 73 && bytes[1] === 73 && bytes[2] === 42 && bytes[3] === 0 || bytes[0] === 77 && bytes[1] === 77 && bytes[2] === 0 && bytes[3] === 42)) {
+    return "image/tiff";
+  }
+  if (bytes.length >= 4 && bytes[0] === 37 && bytes[1] === 80 && bytes[2] === 68 && bytes[3] === 70) {
+    return "application/pdf";
+  }
+  return void 0;
+}
+var ContainerRef = class {
+  constructor(entity, fieldName) {
+    if (!fieldName) {
+      throw new TypeError("ContainerRef: fieldName is required");
+    }
+    this._entity = entity;
+    this.fieldName = fieldName;
+  }
+  /**
+   * Absolute URL of the container field itself
+   * (`…/<EntitySet>(<key>)/<fieldName>`). This is the URL used by binary
+   * `upload()`. Append `/$value` to download.
+   */
+  url() {
+    return `${this._entity.toURL()}/${encodePathSegment(this.fieldName)}`;
+  }
+  /** @internal — `…/<field>/$value` for downloads. */
+  _valueUrl() {
+    return `${this.url()}/$value`;
+  }
+  /**
+   * Download the container's contents and buffer them into a `Blob`. For
+   * very large payloads prefer `getStream()` to avoid buffering in memory.
+   */
+  async get(opts = {}) {
+    const res = await executeRequest(this._entity._client._ctx, this._valueUrl(), {
+      method: "GET",
+      // FMS quirk: `Accept: application/octet-stream` makes `$value` return the
+      // stored filename string as `text/plain` instead of the binary. Use the
+      // wildcard so FMS returns the actual bytes with a sniffed Content-Type.
+      // See `docs/filemaker-quirks.md`.
+      accept: "none",
+      ...opts.signal ? { signal: opts.signal } : {}
+    });
+    const contentType = res.headers.get("content-type") ?? "";
+    const disposition = res.headers.get("content-disposition");
+    const filename = disposition ? parseContentDispositionFilename(disposition) : void 0;
+    const blob = await res.blob();
+    const out = {
+      blob,
+      contentType,
+      size: blob.size
+    };
+    if (filename !== void 0) out.filename = filename;
+    return out;
+  }
+  /**
+   * Stream the container's contents without buffering. Useful for large files
+   * (`pipeTo()` into a writable, forward to another `Response`, etc.).
+   *
+   * Throws if the underlying `Response` has no body.
+   */
+  async getStream(opts = {}) {
+    const res = await executeRequest(this._entity._client._ctx, this._valueUrl(), {
+      method: "GET",
+      // See note in `get()` — Accept: */* avoids the FMS `octet-stream` quirk.
+      accept: "none",
+      ...opts.signal ? { signal: opts.signal } : {}
+    });
+    if (!res.body) {
+      throw new TypeError("ContainerRef.getStream: response has no body");
+    }
+    return res.body;
+  }
+  /**
+   * Upload binary contents to the container. Replaces any existing value.
+   *
+   * Default `encoding: 'binary'` PATCHes `…/<field>` with raw bytes and a
+   * `Content-Type` header. Restricted to PNG / JPEG / GIF / TIFF / PDF.
+   *
+   * `encoding: 'base64'` PATCHes `…/<EntitySet>(<key>)` with a JSON body
+   * containing base64 data plus `@com.filemaker.odata.…` annotations. Use
+   * this when updating multiple container fields (or mixing container and
+   * regular fields) in a single round-trip.
+   *
+   * `contentType` is optional — when omitted, the library sniffs the MIME
+   * from the payload's magic bytes. Throws if no supported signature matches.
+   */
+  async upload(input, opts = {}) {
+    const encoding = input.encoding ?? "binary";
+    const bytes = await toUint8Array(input.data);
+    let contentType = input.contentType;
+    if (!contentType) {
+      const sniffed = sniffContainerMime(bytes);
+      if (!sniffed) {
+        throw new TypeError(
+          `ContainerRef.upload: contentType is required and could not be sniffed from the payload. Pass a contentType explicitly (one of ${FM_CONTAINER_SUPPORTED_MIME_TYPES.join(", ")}).`
+        );
+      }
+      contentType = sniffed;
+    }
+    if (encoding === "binary") {
+      if (!isSupportedContainerMime(contentType)) {
+        throw new TypeError(
+          `ContainerRef.upload (binary): contentType "${contentType}" is not a FileMaker-supported container type. Use one of ${FM_CONTAINER_SUPPORTED_MIME_TYPES.join(", ")}, or switch to { encoding: 'base64' }.`
+        );
+      }
+      const headers = {
+        "Content-Type": contentType
+      };
+      if (input.filename) {
+        headers["Content-Disposition"] = formatContentDisposition(input.filename);
+      }
+      const body2 = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(body2).set(bytes);
+      await executeRequest(this._entity._client._ctx, this.url(), {
+        method: "PATCH",
+        headers,
+        body: body2,
+        accept: "none",
+        ...opts.signal ? { signal: opts.signal } : {}
+      });
+      return;
+    }
+    const body = buildContainerJsonBody({
+      [this.fieldName]: {
+        data: toBase64(bytes),
+        contentType,
+        ...input.filename ? { filename: input.filename } : {}
+      }
+    });
+    await executeRequest(this._entity._client._ctx, this._entity.toURL(), {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Prefer: "return=minimal"
+      },
+      body: JSON.stringify(body),
+      accept: "none",
+      ...opts.signal ? { signal: opts.signal } : {}
+    });
+  }
+  /**
+   * Clear the container value. FMS has no documented per-field DELETE for
+   * record-level data, so the supported path is to PATCH the record with
+   * `{ <fieldName>: null }`.
+   */
+  async delete(opts = {}) {
+    const body = { [this.fieldName]: null };
+    await executeRequest(this._entity._client._ctx, this._entity.toURL(), {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Prefer: "return=minimal"
+      },
+      body: JSON.stringify(body),
+      accept: "none",
+      ...opts.signal ? { signal: opts.signal } : {}
+    });
+  }
+};
+function buildContainerJsonBody(containers, regularFields = {}) {
+  const body = { ...regularFields };
+  for (const [field, value] of Object.entries(containers)) {
+    if (!value.contentType) {
+      throw new TypeError(`buildContainerJsonBody: "${field}".contentType is required`);
+    }
+    body[field] = value.data;
+    body[`${field}@com.filemaker.odata.ContentType`] = value.contentType;
+    if (value.filename) {
+      body[`${field}@com.filemaker.odata.Filename`] = value.filename;
+    }
+  }
+  return body;
+}
+function parseContentDispositionFilename(value) {
+  const ext = value.match(/filename\*\s*=\s*([^']+)'[^']*'([^;]+)/i);
+  if (ext) {
+    const charset = ext[1].trim().toLowerCase();
+    const encoded = ext[2].trim();
+    try {
+      const decoded = decodeURIComponent(encoded);
+      return charset === "utf-8" || charset === "utf8" ? decoded : decoded;
+    } catch {
+    }
+  }
+  const plain = value.match(/filename\s*=\s*("([^"\\]*(?:\\.[^"\\]*)*)"|([^;]+))/i);
+  if (plain) {
+    const quoted = plain[2];
+    if (quoted !== void 0) return quoted.replace(/\\(.)/g, "$1").trim();
+    const unquoted = plain[3];
+    if (unquoted !== void 0) return unquoted.trim();
+  }
+  return void 0;
+}
+function formatContentDisposition(filename) {
+  const TOKEN_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+  const needsRfc5987 = /[^\x00-\x7F]/.test(filename);
+  let base;
+  if (TOKEN_RE.test(filename)) {
+    base = `inline; filename=${filename}`;
+  } else {
+    const safeAscii = filename.replace(/[^\x20-\x7E]/g, "_").replace(/"/g, '\\"');
+    base = `inline; filename="${safeAscii}"`;
+  }
+  if (!needsRfc5987) return base;
+  return `${base}; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+async function toUint8Array(data) {
+  if (data instanceof Uint8Array) return data;
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  const ab = await data.arrayBuffer();
+  return new Uint8Array(ab);
+}
+function toBase64(bytes) {
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(bytes).toString("base64");
+  }
+  let bin = "";
+  const chunk = 32768;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(
+      null,
+      Array.from(bytes.subarray(i, i + chunk))
+    );
+  }
+  return btoa(bin);
 }
 
 // src/scripts.ts
@@ -320,6 +575,23 @@ var EntityRef = class {
     return json;
   }
   /**
+   * `GET` a single field's scalar value via the OData property URL
+   * (`…/<EntitySet>(<key>)/<fieldName>`). FMS responds with the JSON envelope
+   * `{ value: … }`; this method unwraps it and returns just the value.
+   *
+   * Useful when you only need one column without composing a `$select` query.
+   * For container fields use `container(name).get()` instead.
+   */
+  async fieldValue(fieldName, opts = {}) {
+    const url = `${this.toURL()}/${encodePathSegment(fieldName)}`;
+    const json = await executeJson(this._client._ctx, url, {
+      method: "GET",
+      accept: "json",
+      ...opts.signal ? { signal: opts.signal } : {}
+    });
+    return json.value;
+  }
+  /**
    * `PATCH` the entity with partial values. Returns the updated row when the
    * server echoes one (OData `Prefer: return=representation`), otherwise
    * `undefined` on `204 No Content`.
@@ -356,6 +628,47 @@ var EntityRef = class {
    */
   async script(name, opts = {}) {
     return runScriptAtEntity(this._client, this.entitySet, this.key, name, opts);
+  }
+  /**
+   * Get a typed handle to one of this record's container fields, exposing
+   * `.get()`, `.getStream()`, `.upload(...)`, and `.delete()`.
+   */
+  container(fieldName) {
+    return new ContainerRef(this, fieldName);
+  }
+  /**
+   * Update one or more container fields (and optionally regular fields) on
+   * this record in a single base64 PATCH request. This maps to the Claris
+   * "Operation 3" (`PATCH /<EntitySet>(<key>)` with JSON body containing
+   * `<field>`, `<field>@com.filemaker.odata.ContentType`, and
+   * `<field>@com.filemaker.odata.Filename`).
+   *
+   * Each container value's `data` must already be base64-encoded (use the
+   * library's exported `toBase64()` helper or `Buffer.from(bytes).toString('base64')`).
+   *
+   * @example
+   * await db.from('contact').byKey(7).patchContainers(
+   *   {
+   *     photo:    { data: photoB64,    contentType: 'image/png',       filename: 'p.png' },
+   *     contract: { data: contractB64, contentType: 'application/pdf', filename: 'c.pdf' },
+   *   },
+   *   { website: 'https://example.com' },
+   * )
+   */
+  async patchContainers(containers, regularFields = {}, opts = {}) {
+    const headers = {
+      "Content-Type": "application/json",
+      Prefer: opts.returnRepresentation ? "return=representation" : "return=minimal"
+    };
+    if (opts.ifMatch) headers["If-Match"] = opts.ifMatch;
+    const body = buildContainerJsonBody(containers, regularFields);
+    await executeRequest(this._client._ctx, this.toURL(), {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify(body),
+      accept: "none",
+      ...opts.signal ? { signal: opts.signal } : {}
+    });
   }
 };
 
@@ -493,6 +806,38 @@ var Query = class _Query {
     return json;
   }
   /**
+   * `POST` a new entity carrying one or more container fields. Maps to the
+   * Claris "Operation 1" — the request body is a JSON object containing
+   * regular field values plus, for each container field, the base64 data
+   * and the `@com.filemaker.odata.{ContentType,Filename}` annotations.
+   *
+   * Each container value's `data` must already be base64-encoded.
+   *
+   * @example
+   * await db.from('contact').createWithContainers(
+   *   { first_name: 'Bob', last_name: 'Jones' },
+   *   { photo: { data: photoB64, contentType: 'image/png', filename: 'BJONES.png' } },
+   * )
+   */
+  async createWithContainers(regularFields, containers, opts = {}) {
+    if (!this._client) {
+      throw new Error("Query#createWithContainers: no client attached (use FMOData#from)");
+    }
+    const url = `${this._baseUrl}/${encodePathSegment(this._entitySet)}`;
+    const body = buildContainerJsonBody(
+      containers,
+      regularFields
+    );
+    const json = await executeJson(this._client._ctx, url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      accept: "json",
+      ...opts.signal ? { signal: opts.signal } : {}
+    });
+    return json;
+  }
+  /**
    * Execute the query. Returns the parsed OData collection envelope.
    */
   async get(opts = {}) {
@@ -619,13 +964,18 @@ var FMOData = class {
   }
 };
 export {
+  ContainerRef,
   EntityRef,
   FMOData,
   FMODataError,
   FMScriptError,
+  FM_CONTAINER_SUPPORTED_MIME_TYPES,
   Filter,
   Query,
   ScriptInvoker,
   basicAuth,
-  filterFactory
+  buildContainerJsonBody,
+  filterFactory,
+  sniffContainerMime,
+  toBase64
 };

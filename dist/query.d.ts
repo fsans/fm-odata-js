@@ -7,6 +7,7 @@
  * auth, error handling, and the mock server.
  */
 import type { FMOData } from './client.js';
+import { type ContainerJsonValue } from './containers.js';
 import { EntityRef } from './entity.js';
 import { type ScriptOptions, type ScriptResult } from './scripts.js';
 import type { RequestOptions } from './types.js';
@@ -100,6 +101,21 @@ export declare class Query<T = Record<string, unknown>> {
      * it by default).
      */
     create(body: Partial<T> | Record<string, unknown>, opts?: RequestOptions): Promise<T>;
+    /**
+     * `POST` a new entity carrying one or more container fields. Maps to the
+     * Claris "Operation 1" — the request body is a JSON object containing
+     * regular field values plus, for each container field, the base64 data
+     * and the `@com.filemaker.odata.{ContentType,Filename}` annotations.
+     *
+     * Each container value's `data` must already be base64-encoded.
+     *
+     * @example
+     * await db.from('contact').createWithContainers(
+     *   { first_name: 'Bob', last_name: 'Jones' },
+     *   { photo: { data: photoB64, contentType: 'image/png', filename: 'BJONES.png' } },
+     * )
+     */
+    createWithContainers(regularFields: Partial<T> | Record<string, unknown>, containers: Record<string, ContainerJsonValue>, opts?: RequestOptions): Promise<T>;
     /**
      * Execute the query. Returns the parsed OData collection envelope.
      */

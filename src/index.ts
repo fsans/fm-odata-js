@@ -1,4 +1,17 @@
 export { FMOData } from './client.js'
+export {
+  buildContainerJsonBody,
+  ContainerRef,
+  FM_CONTAINER_SUPPORTED_MIME_TYPES,
+  sniffContainerMime,
+  toBase64,
+} from './containers.js'
+export type {
+  ContainerDownload,
+  ContainerJsonValue,
+  ContainerUploadInput,
+  FMContainerMimeType,
+} from './containers.js'
 export { EntityRef } from './entity.js'
 export type { EntityWriteOptions } from './entity.js'
 export { FMODataError, FMScriptError } from './errors.js'

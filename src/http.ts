@@ -106,6 +106,9 @@ async function executeRequestImpl(
   const method = opts.method ?? 'GET'
   const headers = new Headers(opts.headers)
   headers.set('Authorization', await resolveAuthHeader(ctx.token))
+  // Required by the Claris FMS OData API for all requests.
+  if (!headers.has('OData-Version')) headers.set('OData-Version', '4.0')
+  if (!headers.has('OData-MaxVersion')) headers.set('OData-MaxVersion', '4.0')
   if (!headers.has('Accept')) {
     headers.set('Accept', ACCEPT_DEFAULTS[opts.accept ?? 'json'])
   }
@@ -123,6 +126,7 @@ async function executeRequestImpl(
     res = await ctx.fetch(url, {
       method,
       headers,
+      keepalive: true,
       ...(opts.body !== undefined ? { body: opts.body } : {}),
       ...(signal ? { signal } : {}),
     })

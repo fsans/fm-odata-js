@@ -63,6 +63,34 @@ describe('EntityRef.get', () => {
   })
 })
 
+describe('EntityRef.fieldValue', () => {
+  it('GETs the field property URL and unwraps { value: … }', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ value: 'Alice' }))
+    const db = makeClient(fetchMock)
+    const v = await db.from('contact').byKey(7).fieldValue<string>('first_name')
+    expect(v).toBe('Alice')
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(url).toBe(`${BASE}/contact(7)/first_name`)
+    expect((init as RequestInit).method).toBe('GET')
+  })
+
+  it('percent-encodes field names with spaces', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ value: 42 }))
+    const db = makeClient(fetchMock)
+    const v = await db.from('contact').byKey(7).fieldValue<number>('Total Hours')
+    expect(v).toBe(42)
+    const [url] = fetchMock.mock.calls[0]!
+    expect(url).toBe(`${BASE}/contact(7)/Total%20Hours`)
+  })
+
+  it('returns null when the value is null', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ value: null }))
+    const db = makeClient(fetchMock)
+    const v = await db.from('contact').byKey(7).fieldValue<string | null>('middle_name')
+    expect(v).toBeNull()
+  })
+})
+
 describe('EntityRef.patch', () => {
   it('sends PATCH with JSON body and Prefer: return=minimal by default', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))

@@ -4,10 +4,10 @@
 
 **A tiny, type-safe OData v4 client built for FileMaker Server.**
 
-Zero runtime dependencies · ~3.8 KB gzipped · One ES module · Web Viewer / Browser / Node 18+
+Zero runtime dependencies · ~4.6 KB gzipped · One ES module · Web Viewer / Browser / Node 18+
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Bundle](https://img.shields.io/badge/gzip-~3.8%20KB-brightgreen)](#)
+[![Bundle](https://img.shields.io/badge/gzip-~4.6%20KB-brightgreen)](#)
 [![Deps](https://img.shields.io/badge/runtime%20deps-0-blue)](#)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](#)
 [![License](https://img.shields.io/badge/license-MIT-black)](./LICENSE)
@@ -22,11 +22,12 @@ FileMaker Server speaks OData v4, but the spec has sharp corners and FMS has qui
 
 > **Battle-tested in production.** I've been using this library heavily to let FileMaker Web Viewer instances talk to the *same* hosted database they live in — and the performance has been genuinely impressive. Queries that used to require round-tripping through scripts and set-field loops now resolve in a single OData call, with noticeably lower latency and a much cleaner code path. If you're building rich Web Viewer UIs backed by FMS, this is the fastest route I've found.
 
-- **Tiny.** Single ES module, zero runtime dependencies, ~3.8 KB gzipped.
+- **Tiny.** Single ES module, zero runtime dependencies, ~4.6 KB gzipped.
 - **Type-safe.** Fluent, chainable query builder with full TS inference.
 - **Runs anywhere.** Drop it into a FileMaker Web Viewer, a browser, or Node 18+.
 - **FMS-aware.** Handles the documented FMS OData deviations for you.
 - **Scripts built in.** Invoke FileMaker scripts at database, entity-set, or record scope with a single call.
+- **Containers built in.** Upload, download, stream, or clear container fields with typed helpers — `Blob`, `ArrayBuffer`, and `Uint8Array` all accepted.
 - **Resilient.** Basic/Bearer auth with 401 retry, `AbortSignal`, and timeouts built in.
 - **Honest errors.** Every failure becomes a normalized `FMODataError` (or `FMScriptError` for script failures).
 
@@ -36,7 +37,7 @@ FileMaker Server speaks OData v4, but the spec has sharp corners and FMS has qui
 | ----------- | ----------------------------------------------------------------- | :---: |
 | **M1–M3**   | Query builder · collection GET · single-entity CRUD · auth · errors | Done |
 | **M4 · 1/4**| Script execution (database / entity-set / record scope)            | Done (v0.1.4) |
-| **M4 · 2/4**| Containers (binary upload / download)                              | Next |
+| **M4 · 2/4**| Containers (binary upload / download / stream)                     | Done (v0.1.5) |
 | **M4 · 3/4**| `$metadata` (schema introspection)                                 | Planned |
 | **M4 · 4/4**| `$batch` (multipart with changesets)                               | Planned |
 
@@ -138,6 +139,50 @@ try {
   }
 }
 ```
+
+## Container fields
+
+Container fields expose their bytes through `EntityRef#container(fieldName)`.
+The handle gives you three I/O shapes plus a clear operation:
+
+```ts
+const photo = db.from('contact').byKey(42).container('photo')
+
+// Upload (default: binary mode — image / PDF only per FMS)
+await photo.upload({
+  data: new Uint8Array(await file.arrayBuffer()),
+  contentType: 'image/png',
+  filename: 'profile.png',
+})
+
+// Upload any file type (zip, docx, …) via base64 encoding
+await photo.upload({
+  data: zipBytes,
+  contentType: 'application/zip',
+  filename: 'archive.zip',
+  encoding: 'base64',
+})
+
+// Download into memory (good for thumbnails, small assets)
+const { blob, contentType, filename, size } = await photo.get()
+
+// Or stream it (good for large files — no buffering)
+const stream = await photo.getStream()
+await stream.pipeTo(someWritable)
+
+// Clear the container
+await photo.delete()
+```
+
+Under the hood the library uses the two FMS-documented wire formats:
+binary mode `PATCH`es `…/<field>` with raw bytes; base64 mode `PATCH`es the
+parent record with `<field>@com.filemaker.odata.ContentType` /
+`…Filename` annotations. `delete()` clears the value via `PATCH` with
+`{ <field>: null }` (FMS has no per-field DELETE for record data).
+
+The `Content-Disposition` filename is parsed for you on download, including
+RFC 5987 `filename*=UTF-8''…` for non-ASCII names. On upload, non-ASCII
+filenames are emitted in both plain and RFC 5987 form automatically.
 
 ## Live integration tests
 
