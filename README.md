@@ -7,6 +7,8 @@
 Zero runtime dependencies · ~4.6 KB gzipped · One ES module · Web Viewer / Browser / Node 18+
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![OData](https://img.shields.io/badge/OData-v4-0078D4?logo=data&logoColor=white)](https://www.odata.org/)
+[![FileMaker](https://img.shields.io/badge/FileMaker-19.0--22.0-FF6B00?logo=filemaker&logoColor=white)](https://www.claris.com/filemaker/)
 [![Bundle](https://img.shields.io/badge/gzip-~4.6%20KB-brightgreen)](#)
 [![Deps](https://img.shields.io/badge/runtime%20deps-0-blue)](#)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-339933?logo=node.js&logoColor=white)](#)
